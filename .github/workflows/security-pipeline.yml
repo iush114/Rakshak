@@ -80,8 +80,8 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # 10. Push Rakshak Docker image
-      - name: Push Rakshak Docker image
+      # 10. Push rakshak Docker image
+      - name: Push rakshak Docker image
         run: |
           docker tag rakshak:ci ghcr.io/${{ github.repository }}:latest
           docker push ghcr.io/${{ github.repository }}:latest
