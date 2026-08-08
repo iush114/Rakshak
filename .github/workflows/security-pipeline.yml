@@ -4,9 +4,12 @@ on:
   push:
     branches:
       - main
+
   pull_request:
     branches:
       - main
+
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -16,12 +19,15 @@ jobs:
   security:
     name: Rakshak Security Pipeline
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
 
-      # 1. Checkout source code
+      # 1. Checkout Rakshak source code
       - name: Checkout Rakshak
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       # 2. Set up Python
       - name: Set up Python
@@ -38,7 +44,7 @@ jobs:
       # 4. Python syntax check
       - name: Python syntax check
         run: |
-          python -m py_compile app/main.py
+          python -m compileall app
 
       # 5. Scan repository for secrets
       - name: Gitleaks secret scan
@@ -46,14 +52,14 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # 6. Scan filesystem with Trivy
+      # 6. Scan source code and dependencies with Trivy
       - name: Trivy filesystem scan
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          scan-type: "fs"
-          scan-ref: "."
-          format: "table"
-          severity: "CRITICAL,HIGH"
+          scan-type: fs
+          scan-ref: .
+          format: table
+          severity: CRITICAL,HIGH
           ignore-unfixed: true
           exit-code: "1"
 
@@ -66,9 +72,9 @@ jobs:
       - name: Trivy Docker image scan
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          image-ref: "rakshak:ci"
-          format: "table"
-          severity: "CRITICAL,HIGH"
+          image-ref: rakshak:ci
+          format: table
+          severity: CRITICAL,HIGH
           ignore-unfixed: true
           exit-code: "1"
 
@@ -80,8 +86,8 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # 10. Push rakshak Docker image
-      - name: Push rakshak Docker image
+      # 10. Tag and push Rakshak Docker image
+      - name: Push Rakshak Docker image
         run: |
-          docker tag rakshak:ci ghcr.io/${{ github.repository }}:latest
-          docker push ghcr.io/${{ github.repository }}:latest
+          docker tag rakshak:ci ghcr.io/iush114/rakshak:latest
+          docker push ghcr.io/iush114/rakshak:latest
