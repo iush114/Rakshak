@@ -4,37 +4,32 @@ on:
   push:
     branches:
       - main
-
   pull_request:
     branches:
       - main
 
-  workflow_dispatch:
-
 permissions:
   contents: read
+  packages: write
 
 jobs:
-  security-scan:
-    name: Security Scanning
+  security:
+    name: Rakshak Security Pipeline
     runs-on: ubuntu-latest
-    timeout-minutes: 15
 
     steps:
 
       # 1. Checkout source code
       - name: Checkout Rakshak
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
+        uses: actions/checkout@v4
 
-      # 2. Setup Python
+      # 2. Set up Python
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      # 3. Install dependencies
+      # 3. Install Python dependencies
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
@@ -43,25 +38,26 @@ jobs:
       # 4. Python syntax check
       - name: Python syntax check
         run: |
-          python -m compileall app
+          python -m py_compile app/main.py
 
-      # 5. Detect secrets
+      # 5. Scan repository for secrets
       - name: Gitleaks secret scan
-        uses: gitleaks/gitleaks-action@v3
+        uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # 6. Scan source/dependencies with Trivy
+      # 6. Scan filesystem with Trivy
       - name: Trivy filesystem scan
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: "fs"
           scan-ref: "."
+          format: "table"
           severity: "CRITICAL,HIGH"
           ignore-unfixed: true
           exit-code: "1"
 
-      # 7. Build Docker image
+      # 7. Build Rakshak Docker image
       - name: Build Rakshak Docker image
         run: |
           docker build -t rakshak:ci .
@@ -75,3 +71,17 @@ jobs:
           severity: "CRITICAL,HIGH"
           ignore-unfixed: true
           exit-code: "1"
+
+      # 9. Login to GitHub Container Registry
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # 10. Push Rakshak Docker image
+      - name: Push Rakshak Docker image
+        run: |
+          docker tag rakshak:ci ghcr.io/${{ github.repository }}:latest
+          docker push ghcr.io/${{ github.repository }}:latest
