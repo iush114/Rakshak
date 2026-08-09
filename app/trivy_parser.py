@@ -12,10 +12,11 @@ def parse_trivy_report(report_path: str) -> list[SecurityFinding]:
 
     path = Path(report_path)
 
+    # If the report does not exist, return no findings
+    # instead of crashing Rakshak.
     if not path.exists():
-        raise FileNotFoundError(
-            f"Trivy report not found: {report_path}"
-        )
+        print(f"Trivy report not found: {report_path}")
+        return []
 
     with path.open("r", encoding="utf-8") as file:
         report = json.load(file)
@@ -26,7 +27,10 @@ def parse_trivy_report(report_path: str) -> list[SecurityFinding]:
         target = result.get("Target", "Unknown target")
 
         for vulnerability in result.get("Vulnerabilities", []) or []:
-            severity = vulnerability.get("Severity", "UNKNOWN")
+            severity = vulnerability.get(
+                "Severity",
+                "UNKNOWN",
+            )
 
             vulnerability_id = vulnerability.get(
                 "VulnerabilityID",
@@ -53,8 +57,8 @@ def parse_trivy_report(report_path: str) -> list[SecurityFinding]:
                 "",
             )
 
-            # Trivy's CVSS score can be used as an
-            # approximation of exploitability.
+            # Use Trivy's CVSS score as an approximation
+            # of exploitability.
             cvss_score = 0.5
 
             cvss = vulnerability.get("CVSS", {})
@@ -64,7 +68,10 @@ def parse_trivy_report(report_path: str) -> list[SecurityFinding]:
                     score = cvss_data.get("V3Score")
 
                     if score is not None:
-                        cvss_score = min(float(score) / 10, 1.0)
+                        cvss_score = min(
+                            float(score) / 10,
+                            1.0,
+                        )
                         break
 
             findings.append(
@@ -75,7 +82,8 @@ def parse_trivy_report(report_path: str) -> list[SecurityFinding]:
                     description=(
                         f"{description}\n"
                         f"Target: {target}\n"
-                        f"Installed version: {installed_version}\n"
+                        f"Installed version: "
+                        f"{installed_version}\n"
                         f"Fixed version: "
                         f"{fixed_version or 'No fix available'}"
                     ),
