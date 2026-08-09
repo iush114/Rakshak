@@ -25,13 +25,13 @@ jobs:
 
       # 1. Checkout Rakshak source code
       - name: Checkout Rakshak
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       # 2. Set up Python
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -48,7 +48,7 @@ jobs:
 
       # 5. Scan repository for secrets
       - name: Gitleaks secret scan
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -80,13 +80,13 @@ jobs:
 
       # 9. Login to GitHub Container Registry
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # 10. Tag and push Rakshak Docker image
+      # 10. Push Rakshak Docker image
       - name: Push Rakshak Docker image
         run: |
           docker tag rakshak:ci ghcr.io/iush114/rakshak:latest
