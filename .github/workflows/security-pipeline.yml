@@ -46,7 +46,7 @@ jobs:
         run: |
           python -m compileall app
 
-      # 5. Run Gitleaks and generate JSON report
+      # 5. Run Gitleaks secret scan
       - name: Gitleaks secret scan
         uses: gitleaks/gitleaks-action@v3
         continue-on-error: true
@@ -65,7 +65,7 @@ jobs:
             --report-path reports/gitleaks-results.json \
             --exit-code 0
 
-      # 7. Trivy filesystem scan - JSON report
+      # 7. Trivy filesystem scan
       - name: Trivy filesystem scan
         uses: aquasecurity/trivy-action@v0.36.0
         continue-on-error: true
@@ -95,14 +95,14 @@ jobs:
           ignore-unfixed: true
           exit-code: "0"
 
-      # 10. Run Rakshak analysis
+      # 10. Run Rakshak security analysis
       - name: Run Rakshak security analysis
         run: |
           python app/main.py
 
       # 11. Upload Rakshak security report
       - name: Upload Rakshak security report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: rakshak-security-report
           path: reports/
