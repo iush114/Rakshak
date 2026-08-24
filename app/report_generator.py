@@ -1,133 +1,180 @@
-from datetime import datetime
 import json
+from pathlib import Path
 def generate_report(findings):
     """
-    Generate a unified Rakshak security report
-    from prioritized security findings.
+    Convert prioritized Rakshak findings into a JSON-serializable report.
+    Accepts:
+        - list[dict] from prioritize_findings()
+    Returns:
+        dict containing summary and findings.
     """
-
-    if not findings:
-        return {
-            "generated_at": datetime.now().isoformat(),
-            "security_score": 100,
-            "summary": {
-                "critical": 0,
-                "high": 0,
-                "medium": 0,
-                "low": 0,
-            },
-            "findings": [],
-        }
-
+    if findings is None:
+        findings = []
+    if not isinstance(findings, list):
+        findings = list(findings)
+    # ---------------------------------------------------------
+    # Calculate summary
+    # ---------------------------------------------------------
+    total = len(findings)
     critical = sum(
         1 for finding in findings
-        if finding["priority"] == "CRITICAL"
+        if str(finding.get("priority", "")).upper() == "CRITICAL"
     )
-
     high = sum(
         1 for finding in findings
-        if finding["priority"] == "HIGH"
+        if str(finding.get("priority", "")).upper() == "HIGH"
     )
-
     medium = sum(
         1 for finding in findings
-        if finding["priority"] == "MEDIUM"
+        if str(finding.get("priority", "")).upper() == "MEDIUM"
     )
-
     low = sum(
         1 for finding in findings
-        if finding["priority"] == "LOW"
+        if str(finding.get("priority", "")).upper() == "LOW"
     )
-
-    # The highest-risk finding determines the main
-    # security impact of the project.
-    highest_risk = max(
-        finding["risk_score"]
+    risk_scores = [
+        int(finding.get("risk_score", 0))
         for finding in findings
+        if isinstance(finding, dict)
+    ]
+    overall_risk = (
+        round(sum(risk_scores) / len(risk_scores))
+        if risk_scores
+        else 0
     )
-
-    security_score = max(0, 100 - highest_risk)
-
-    return {
-        "generated_at": datetime.now().isoformat(),
-
-        "security_score": security_score,
-
+    # ---------------------------------------------------------
+    # Build report
+    # ---------------------------------------------------------
+    report = {
+        "tool": "Rakshak",
         "summary": {
+            "total_findings": total,
             "critical": critical,
             "high": high,
             "medium": medium,
             "low": low,
+            "overall_risk_score": overall_risk,
         },
-
         "findings": findings,
     }
-
-
-def print_report(report):
-    """
-    Print the unified Rakshak report in a readable format.
-    """
-
-    print("\n")
-    print("=" * 70)
-    print("                 RAKSHAK SECURITY REPORT")
-    print("=" * 70)
-
-    print(f"\nSecurity Score: {report['security_score']}/100")
-
-    summary = report["summary"]
-
-    print("\nSummary:")
-    print(f"  CRITICAL : {summary['critical']}")
-    print(f"  HIGH     : {summary['high']}")
-    print(f"  MEDIUM   : {summary['medium']}")
-    print(f"  LOW      : {summary['low']}")
-
-    print("\nPrioritized Findings:")
-    print("-" * 70)
-
-    for index, finding in enumerate(
-        report["findings"],
-        start=1,
-    ):
-        print(
-            f"\n{index}. "
-            f"[{finding['priority']}] "
-            f"{finding['title']}"
-        )
-
-        print(
-            f"   Risk Score : "
-            f"{finding['risk_score']}/100"
-        )
-
-        print(
-            f"   Severity   : "
-            f"{finding['severity']}"
-        )
-
-        print(
-            f"   Tool       : "
-            f"{finding['tool']}"
-        )
-
-        print(
-            f"   Description: "
-            f"{finding['description']}"
-        )
-
-    print("\n" + "=" * 70)
-
-
-
-
+    return report
 def save_report(report, output_path="reports/rakshak-report.json"):
     """
-    Save the Rakshak security report as JSON.
+    Save Rakshak report as JSON.
     """
-
-    with open(output_path, "w", encoding="utf-8") as file:
-        json.dump(report, file, indent=4)
-
-    print(f"\nReport saved to: {output_path}")
+    path = Path(output_path)
+    path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+    with path.open(
+        "w",
+        encoding="utf-8",
+    ) as file:
+        json.dump(
+            report,
+            file,
+            indent=2,
+            ensure_ascii=False,
+        )
+    print(
+        f"[INFO] Rakshak report saved to: {path}"
+    )
+    return path
+def print_report(report):
+    """
+    Print a readable Rakshak security report
+    to the terminal.
+    """
+    if not isinstance(report, dict):
+        print("[WARNING] Invalid Rakshak report.")
+        return
+    summary = report.get(
+        "summary",
+        {},
+    )
+    findings = report.get(
+        "findings",
+        [],
+    )
+    print()
+    print("=" * 70)
+    print("                    RAKSHAK SECURITY REPORT")
+    print("=" * 70)
+    print()
+    print("SUMMARY")
+    print("-" * 70)
+    print(
+        f"Total findings : "
+        f"{summary.get('total_findings', 0)}"
+    )
+    print(
+        f"Critical       : "
+        f"{summary.get('critical', 0)}"
+    )
+    print(
+        f"High           : "
+        f"{summary.get('high', 0)}"
+    )
+    print(
+        f"Medium         : "
+        f"{summary.get('medium', 0)}"
+    )
+    print(
+        f"Low            : "
+        f"{summary.get('low', 0)}"
+    )
+    print(
+        f"Overall risk   : "
+        f"{summary.get('overall_risk_score', 0)}/100"
+    )
+    print()
+    print("=" * 70)
+    print("FINDINGS")
+    print("=" * 70)
+    if not findings:
+        print()
+        print("No security findings detected.")
+        print()
+        return
+    for index, finding in enumerate(
+        findings,
+        start=1,
+    ):
+        print()
+        print(
+            f"[{index}] "
+            f"{finding.get('priority', 'UNKNOWN')} "
+            f"- "
+            f"{finding.get('vulnerability_id', 'UNKNOWN')}"
+        )
+        print(
+            f"Tool       : "
+            f"{finding.get('tool', 'Unknown')}"
+        )
+        print(
+            f"Severity   : "
+            f"{finding.get('severity', 'UNKNOWN')}"
+        )
+        print(
+            f"Risk Score : "
+            f"{finding.get('risk_score', 0)}/100"
+        )
+        print(
+            f"Target     : "
+            f"{finding.get('target', 'Unknown target')}"
+        )
+        print(
+            f"Packages   : "
+            f"{', '.join(finding.get('affected_packages', []))}"
+        )
+        print(
+            f"Title      : "
+            f"{finding.get('title', 'Unknown')}"
+        )
+        if finding.get("fixed_version"):
+            print(
+                f"Fixed In   : "
+                f"{finding.get('fixed_version')}"
+            )
+        print("-" * 70)

@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from risk_engine import SecurityFinding
+from app.risk_engine import SecurityFinding
 
 
 def parse_gitleaks_report(report_path: str) -> list[SecurityFinding]:
