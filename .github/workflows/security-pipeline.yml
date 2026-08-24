@@ -1,3 +1,4 @@
+```yaml
 name: Rakshak DevSecOps Security Pipeline
 
 on:
@@ -98,7 +99,7 @@ jobs:
       # 10. Run Rakshak security analysis
       - name: Run Rakshak security analysis
         run: |
-          python app/main.py
+          python -m app.main
 
       # 11. Upload Rakshak security report
       - name: Upload Rakshak security report
@@ -121,3 +122,4 @@ jobs:
         run: |
           docker tag rakshak:ci ghcr.io/iush114/rakshak:latest
           docker push ghcr.io/iush114/rakshak:latest
+```
