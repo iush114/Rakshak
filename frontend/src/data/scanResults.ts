@@ -33,51 +33,20 @@ export const SCAN_ANIMATED_STEPS: ScanStep[] = [
   { id: 8, label: 'AI Security Analysis', subtext: 'Generating AI remediation insights' }
 ];
 
-export const INITIAL_RECENT_SCANS: RecentScanRecord[] = [
-  {
-    id: 'scan-101',
-    repository: 'rakshak-security',
-    branch: 'main',
-    findingsCount: 77,
-    riskScore: 36,
-    riskLabel: 'Medium Risk',
-    date: 'Today, 15:42',
-    duration: '24 seconds'
-  },
-  {
-    id: 'scan-100',
-    repository: 'devsecops-demo',
-    branch: 'main',
-    findingsCount: 24,
-    riskScore: 18,
-    riskLabel: 'Low Risk',
-    date: 'Yesterday, 18:10',
-    duration: '18 seconds'
-  },
-  {
-    id: 'scan-099',
-    repository: 'ecommerce-app',
-    branch: 'main',
-    findingsCount: 45,
-    riskScore: 52,
-    riskLabel: 'High Risk',
-    date: '20 Aug 2026',
-    duration: '31 seconds'
-  }
-];
+export const INITIAL_RECENT_SCANS: RecentScanRecord[] = [];
 
 export const DEFAULT_SCAN_RESULTS = {
-  scanDuration: '24 seconds',
-  totalFindings: 77,
+  scanDuration: '0.0s',
+  totalFindings: 0,
   severityBreakdown: {
-    critical: 4,
-    high: 8,
-    medium: 29,
-    low: 36
+    critical: 0,
+    high: 0,
+    medium: 0,
+    low: 0
   },
-  riskScore: 36,
-  riskCategory: 'Medium Risk',
-  filesScanned: 128,
-  dependenciesChecked: 47,
-  secretsChecked: 128
+  riskScore: 0,
+  riskCategory: 'Low Risk',
+  filesScanned: 0,
+  dependenciesChecked: 0,
+  secretsChecked: 0
 };

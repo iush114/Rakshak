@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import { GithubIcon } from '@/components/ui/GithubIcon';
 import { useSecurity } from '@/context/SecurityContext';
+import { API_BASE_URL } from '@/services/api';
 
 interface AuthPageProps {
   initialTab?: 'login' | 'register';
@@ -130,20 +131,16 @@ export default function Login({ initialTab = 'login' }: AuthPageProps) {
     }, 700);
   };
 
-  // GitHub OAuth Login Simulation
+  // GitHub OAuth Login - Direct backend OAuth flow
   const handleGithubAuth = () => {
     setIsLoading(true);
     setErrorMessage(null);
     setToastMessage({
       title: 'Connecting GitHub Account',
-      desc: 'Authorizing through GitHub OAuth...',
+      desc: 'Redirecting to GitHub OAuth authorization...',
       type: 'info'
     });
-    setTimeout(() => {
-      setIsLoading(false);
-      connectGithub();
-      navigate('/dashboard');
-    }, 600);
+    window.location.href = `${API_BASE_URL}/auth/github`;
   };
 
   // Forgot Password Simulation

@@ -1,9 +1,9 @@
 import { useState } from 'react';
-import { 
-  BrainCircuit, 
-  Eye, 
-  Sparkles, 
-  X, 
+import {
+  BrainCircuit,
+  Eye,
+  Sparkles,
+  X,
   Cpu
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
@@ -19,7 +19,7 @@ export default function AIAnalysisHistory() {
 
   return (
     <div className="space-y-6 pb-12">
-      
+
       {/* HEADER */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-border/50 pb-5">
         <div>
@@ -52,52 +52,64 @@ export default function AIAnalysisHistory() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/40 font-sans">
-                {aiHistory.map((item) => (
-                  <tr 
-                    key={item.id} 
-                    onClick={() => setSelectedRecord(item)}
-                    className="hover:bg-white/5 transition-colors cursor-pointer group"
-                  >
-                    {/* CVE ID */}
-                    <td className="px-5 py-4 font-mono font-bold text-neonPurple whitespace-nowrap">
-                      {item.cve}
-                    </td>
-
-                    {/* Title */}
-                    <td className="px-5 py-4 font-medium text-white max-w-sm truncate" title={item.title}>
-                      {item.title}
-                    </td>
-
-                    {/* Analyzed On */}
-                    <td className="px-5 py-4 font-mono text-textSecondary whitespace-nowrap">
-                      {item.analyzedOn}
-                    </td>
-
-                    {/* Risk Score */}
-                    <td className="px-5 py-4 whitespace-nowrap">
-                      <span className="font-black text-warning text-sm">{item.riskScore}/100</span>
-                    </td>
-
-                    {/* AI Model */}
-                    <td className="px-5 py-4 whitespace-nowrap">
-                      <Badge variant="outline" className="text-[10px] text-pinkAccent border-pinkAccent/30 flex items-center gap-1 w-fit">
-                        <Cpu size={12} />
-                        <span>{item.aiModel}</span>
-                      </Badge>
-                    </td>
-
-                    {/* Actions */}
-                    <td className="px-5 py-4 text-right whitespace-nowrap">
-                      <button
-                        onClick={(e) => { e.stopPropagation(); setSelectedRecord(item); }}
-                        className="px-3 py-1.5 rounded-lg bg-neonPurple/10 border border-neonPurple/30 text-neonPurple hover:bg-neonPurple hover:text-white transition-all flex items-center gap-1.5 ml-auto cursor-pointer text-xs font-semibold"
-                      >
-                        <Eye size={14} />
-                        <span>View</span>
-                      </button>
+                {aiHistory.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="px-5 py-14 text-center text-textSecondary font-sans">
+                      <BrainCircuit size={40} className="mx-auto text-neonPurple/40 mb-3" />
+                      <p className="font-bold text-white text-sm">No analysis history available.</p>
+                      <p className="text-xs text-textSecondary mt-1 max-w-md mx-auto">
+                        To generate AI threat remediation insights, navigate to Findings and click &quot;Analyze with AI&quot; on any security vulnerability.
+                      </p>
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  aiHistory.map((item) => (
+                    <tr
+                      key={item.id}
+                      onClick={() => setSelectedRecord(item)}
+                      className="hover:bg-white/5 transition-colors cursor-pointer group"
+                    >
+                      {/* CVE ID */}
+                      <td className="px-5 py-4 font-mono font-bold text-neonPurple whitespace-nowrap">
+                        {item.cve}
+                      </td>
+
+                      {/* Title */}
+                      <td className="px-5 py-4 font-medium text-white max-w-sm truncate" title={item.title}>
+                        {item.title}
+                      </td>
+
+                      {/* Analyzed On */}
+                      <td className="px-5 py-4 font-mono text-textSecondary whitespace-nowrap">
+                        {item.analyzedOn}
+                      </td>
+
+                      {/* Risk Score */}
+                      <td className="px-5 py-4 whitespace-nowrap">
+                        <span className="font-black text-warning text-sm">{item.riskScore}/100</span>
+                      </td>
+
+                      {/* AI Model */}
+                      <td className="px-5 py-4 whitespace-nowrap">
+                        <Badge variant="outline" className="text-[10px] text-pinkAccent border-pinkAccent/30 flex items-center gap-1 w-fit">
+                          <Cpu size={12} />
+                          <span>{item.aiModel}</span>
+                        </Badge>
+                      </td>
+
+                      {/* Actions */}
+                      <td className="px-5 py-4 text-right whitespace-nowrap">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setSelectedRecord(item); }}
+                          className="px-3 py-1.5 rounded-lg bg-neonPurple/10 border border-neonPurple/30 text-neonPurple hover:bg-neonPurple hover:text-white transition-all flex items-center gap-1.5 ml-auto cursor-pointer text-xs font-semibold"
+                        >
+                          <Eye size={14} />
+                          <span>View</span>
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
@@ -108,7 +120,7 @@ export default function AIAnalysisHistory() {
       <AnimatePresence>
         {selectedRecord && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 backdrop-blur-md p-4">
-            <motion.div 
+            <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
@@ -125,7 +137,7 @@ export default function AIAnalysisHistory() {
                     <p className="text-xs text-textSecondary">{selectedRecord.title}</p>
                   </div>
                 </div>
-                <button 
+                <button
                   onClick={() => setSelectedRecord(null)}
                   className="text-textSecondary hover:text-white transition-colors"
                 >
@@ -135,7 +147,7 @@ export default function AIAnalysisHistory() {
 
               {/* Content */}
               <div className="p-6 space-y-4 text-xs font-sans">
-                
+
                 {/* Metadata Pills */}
                 <div className="grid grid-cols-3 gap-3 p-3 rounded-xl bg-[#090014] border border-[#2A1240] text-center">
                   <div>
@@ -178,8 +190,8 @@ export default function AIAnalysisHistory() {
 
                 {/* Close Button */}
                 <div className="pt-3 flex justify-end border-t border-[#2A1240]">
-                  <Button 
-                    variant="outline" 
+                  <Button
+                    variant="outline"
                     onClick={() => setSelectedRecord(null)}
                     className="text-xs"
                   >

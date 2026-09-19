@@ -189,6 +189,7 @@ def scan_code_content(
                                 tool="Code Scanner",
                                 severity=severity,
                                 title=finding_title,
+                                vulnerability_id=vulnerability_id,
                                 description=finding_desc,
                                 exploitability=exploitability,
                                 production=True,

@@ -21,7 +21,7 @@ interface PolicyItem {
   rules: string[];
 }
 
-const mockPolicies: PolicyItem[] = [
+const DEFAULT_POLICIES: PolicyItem[] = [
   {
     id: 'pol-1',
     category: 'Container Security',
@@ -77,7 +77,7 @@ const mockPolicies: PolicyItem[] = [
 ];
 
 export default function Policies() {
-  const [policies, setPolicies] = useState<PolicyItem[]>(mockPolicies);
+  const [policies, setPolicies] = useState<PolicyItem[]>(DEFAULT_POLICIES);
   const [savedToast, setSavedToast] = useState(false);
 
   const togglePolicy = (id: string) => {

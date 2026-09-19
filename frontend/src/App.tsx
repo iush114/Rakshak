@@ -10,6 +10,7 @@ import Reports from './pages/reports/Reports';
 import AIAnalysisHistory from './pages/ai-analysis-history/AIAnalysisHistory';
 import Settings from './pages/settings/Settings';
 import About from './pages/about/About';
+import ScanHistory from './pages/scan-history/ScanHistory';
 import { SecurityProvider } from './context/SecurityContext';
 
 function App() {
@@ -26,8 +27,11 @@ function App() {
           {/* Protected Main App Layout */}
           <Route element={<Layout />}>
             <Route path="dashboard" element={<Dashboard />} />
+            <Route path="repositories" element={<RepositoryScan />} />
             <Route path="repository-scan" element={<RepositoryScan />} />
             <Route path="findings" element={<Findings />} />
+            <Route path="scan-history" element={<ScanHistory />} />
+            <Route path="scan-history/:scanId" element={<ScanHistory />} />
             <Route path="reports" element={<Reports />} />
             <Route path="ai-analysis-history" element={<AIAnalysisHistory />} />
             <Route path="settings" element={<Settings />} />

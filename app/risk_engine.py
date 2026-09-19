@@ -11,6 +11,12 @@ class SecurityFinding:
     exploitability: float = 0.5
     production: bool = True
     fix_available: bool = True
+    # Stable, scanner-provided identifier (CVE-XXXX-YYYY, GHSA-xxxx-yyyy-zzzz,
+    # CODE-<PATTERN>, GITLEAKS-<RULE-ID>). Carried as a first-class field so it
+    # survives the SecurityFinding -> Finding persistence boundary instead of
+    # being recoverable only by parsing the title. Empty string when the source
+    # scanner supplies no stable identifier -- never a placeholder.
+    vulnerability_id: str = ""
 
 
 # Base severity scores

@@ -32,8 +32,15 @@ export default function Reports() {
   // View Report Modal State
   const [viewingReport, setViewingReport] = useState<SecurityReport | null>(null);
 
-  // Download Report Simulation
+  // Download Report
   const handleDownload = (report: SecurityReport) => {
+    const crit = findings.filter(f => f.severity === 'critical').length;
+    const high = findings.filter(f => f.severity === 'high').length;
+    const med = findings.filter(f => f.severity === 'medium').length;
+    const low = findings.filter(f => f.severity === 'low').length;
+
+    const findingsListStr = findings.slice(0, 15).map((f, i) => `${i + 1}. [${f.severity.toUpperCase()}] ${f.cve}: ${f.title} (${f.package})`).join('\n');
+
     const content = `RAKSHAK DEVSECOPS SECURITY REPORT
 ----------------------------------
 Report Name: ${report.name}
@@ -45,12 +52,15 @@ Status: ${report.status}
 
 EXECUTIVE SUMMARY:
 Rakshak AI DevSecOps platform analyzed repository source code, dependencies, and container environments.
-Total 77 findings detected (4 Critical, 8 High, 29 Medium, 36 Low).
+Total ${report.totalFindings} findings detected (${crit} Critical, ${high} High, ${med} Medium, ${low} Low).
+
+TOP IDENTIFIED VULNERABILITIES:
+${findingsListStr || 'No active vulnerabilities recorded.'}
 
 RECOMMENDED REMEDIATION:
-1. Immediately patch xz-utils (CVE-2024-3094) and runc (CVE-2024-21626).
-2. Rotate exposed AWS API keys and Stripe secret credentials.
-3. Apply Jinja2 and nghttp2 package updates.
+1. Apply recommended patches for Critical and High priority vulnerabilities.
+2. Ensure secrets and credentials are stored in secure secret managers.
+3. Keep container base images and dependencies updated to latest secure releases.
 `;
     const blob = new Blob([content], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
@@ -119,73 +129,85 @@ RECOMMENDED REMEDIATION:
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/40 font-sans">
-                {reports.map((report) => (
-                  <tr key={report.id} className="hover:bg-white/5 transition-colors">
-                    {/* Report Name */}
-                    <td className="px-5 py-4 font-bold text-white flex items-center gap-2.5">
-                      <FileDown size={18} className="text-pinkAccent shrink-0" />
-                      <span>{report.name}</span>
-                    </td>
-
-                    {/* Type */}
-                    <td className="px-5 py-4">
-                      <Badge variant="outline" className="text-[10px] text-neonPurple border-neonPurple/30">
-                        {report.type}
-                      </Badge>
-                    </td>
-
-                    {/* Generated On */}
-                    <td className="px-5 py-4 font-mono text-textSecondary">
-                      {report.generatedOn}
-                    </td>
-
-                    {/* Total Findings */}
-                    <td className="px-5 py-4 font-bold text-white">
-                      {report.totalFindings}
-                    </td>
-
-                    {/* Risk Score */}
-                    <td className="px-5 py-4 font-extrabold text-warning">
-                      {report.riskScore}/100
-                    </td>
-
-                    {/* Status */}
-                    <td className="px-5 py-4">
-                      <Badge variant="success" className="text-[10px]">
-                        {report.status}
-                      </Badge>
-                    </td>
-
-                    {/* Actions */}
-                    <td className="px-5 py-4 text-right">
-                      <div className="flex items-center justify-end gap-2">
-                        <button
-                          onClick={() => setViewingReport(report)}
-                          className="px-2.5 py-1 rounded-lg bg-card border border-border text-textSecondary hover:text-white hover:border-neonPurple transition-all flex items-center gap-1 cursor-pointer"
-                        >
-                          <Eye size={14} />
-                          <span>View</span>
-                        </button>
-
-                        <button
-                          onClick={() => handleDownload(report)}
-                          className="px-2.5 py-1 rounded-lg bg-neonPurple/10 border border-neonPurple/30 text-neonPurple hover:bg-neonPurple hover:text-white transition-all flex items-center gap-1 cursor-pointer"
-                        >
-                          <Download size={14} />
-                          <span>Download</span>
-                        </button>
-
-                        <button
-                          onClick={() => deleteReport(report.id)}
-                          className="p-1 rounded-lg bg-card border border-border text-textSecondary hover:text-danger hover:border-danger/40 transition-all cursor-pointer"
-                          title="Delete Report"
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      </div>
+                {reports.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="px-5 py-14 text-center text-textSecondary font-sans">
+                      <FileText size={40} className="mx-auto text-neonPurple/40 mb-3" />
+                      <p className="font-bold text-white text-sm">No reports available.</p>
+                      <p className="text-xs text-textSecondary mt-1 max-w-md mx-auto">
+                        Click &quot;Generate New Report&quot; above to create a DevSecOps executive audit report from your active scan findings.
+                      </p>
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  reports.map((report) => (
+                    <tr key={report.id} className="hover:bg-white/5 transition-colors">
+                      {/* Report Name */}
+                      <td className="px-5 py-4 font-bold text-white flex items-center gap-2.5">
+                        <FileDown size={18} className="text-pinkAccent shrink-0" />
+                        <span>{report.name}</span>
+                      </td>
+
+                      {/* Type */}
+                      <td className="px-5 py-4">
+                        <Badge variant="outline" className="text-[10px] text-neonPurple border-neonPurple/30">
+                          {report.type}
+                        </Badge>
+                      </td>
+
+                      {/* Generated On */}
+                      <td className="px-5 py-4 font-mono text-textSecondary">
+                        {report.generatedOn}
+                      </td>
+
+                      {/* Total Findings */}
+                      <td className="px-5 py-4 font-bold text-white">
+                        {report.totalFindings}
+                      </td>
+
+                      {/* Risk Score */}
+                      <td className="px-5 py-4 font-extrabold text-warning">
+                        {report.riskScore}/100
+                      </td>
+
+                      {/* Status */}
+                      <td className="px-5 py-4">
+                        <Badge variant="success" className="text-[10px]">
+                          {report.status}
+                        </Badge>
+                      </td>
+
+                      {/* Actions */}
+                      <td className="px-5 py-4 text-right">
+                        <div className="flex items-center justify-end gap-2">
+                          <button
+                            onClick={() => setViewingReport(report)}
+                            className="px-2.5 py-1 rounded-lg bg-card border border-border text-textSecondary hover:text-white hover:border-neonPurple transition-all flex items-center gap-1 cursor-pointer"
+                          >
+                            <Eye size={14} />
+                            <span>View</span>
+                          </button>
+
+                          <button
+                            onClick={() => handleDownload(report)}
+                            className="px-2.5 py-1 rounded-lg bg-neonPurple/10 border border-neonPurple/30 text-neonPurple hover:bg-neonPurple hover:text-white transition-all flex items-center gap-1 cursor-pointer"
+                          >
+                            <Download size={14} />
+                            <span>Download</span>
+                          </button>
+
+                          <button
+                            onClick={() => deleteReport(report.id)}
+                            className="p-1 rounded-lg bg-card border border-border text-textSecondary hover:text-danger hover:border-danger/40 transition-all cursor-pointer"
+                            title="Delete Report"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
@@ -228,7 +250,7 @@ RECOMMENDED REMEDIATION:
               <div className="p-4 rounded-xl bg-[#090014]/60 border border-[#2A1240] space-y-2">
                 <span className="font-bold text-white block uppercase tracking-wider text-[10px]">Executive Audit Findings</span>
                 <p className="text-textSecondary leading-relaxed">
-                  Repository scanning detected 77 total security findings across active application branches. Critical CVEs identified in xz-utils and runc require immediate patching prior to container deployment.
+                  {`Repository security scan completed with ${viewingReport.totalFindings} security findings tracked across application branches. Overall security posture is recorded at a risk index of ${viewingReport.riskScore}/100.`}
                 </p>
               </div>
 

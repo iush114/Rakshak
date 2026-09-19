@@ -1,43 +1,85 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, field_validator
-from typing import Optional
+import json
+import logging
+import os
+import urllib.error
+import urllib.parse
+import urllib.request
 import uuid
+from datetime import datetime
+from pathlib import Path
+import re
 
-from app.trivy_parser import parse_trivy_report
-from app.gitleaks_parser import parse_gitleaks_report
-from app.risk_engine import prioritize_findings
-from app.code_scanner import scan_code_content
+logger = logging.getLogger(__name__)
 
-from app.report_generator import (
-    generate_report,
-    print_report,
-    save_report,
+from dotenv import load_dotenv
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import distinct, func, or_, text
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+from starlette.middleware.sessions import SessionMiddleware
+from starlette.responses import JSONResponse, RedirectResponse
+
+from app.database import Base, engine, get_db
+from app.config import is_production, is_within_allowed_root
+from app.models import Finding, GitHubWebhookDelivery, Scan
+from app.models import FindingLifecycle, User, UserInstallation, UserRepository
+from app.finding_lifecycle import process_completed_scan_lifecycle
+from app.security_gate import persist_security_gate
+from app.scanner_service import (
+    run_code_scan,
+    run_dependency_scan,
+    run_secret_scan,
+    run_container_scan,
 )
-
+from app.github_service import (
+    get_repository,
+    download_repository,
+)
 from app.ai_analyzer import analyze_finding
+from app.github_webhook import (
+    get_webhook_secret,
+    verify_github_signature,
+    extract_push_event_metadata,
+    extract_pull_request_event_metadata,
+    log_webhook_event,
+)
+from app.scan_service import (
+    run_github_repository_scan,
+    run_github_repository_scan_background,
+)
+from app.github_checks import get_check_run_token
+from app.github_app import get_github_app_status, get_repository_installation
+from app.celery_app import get_queue_status
+from app.tasks import run_github_repository_scan_task
 
 
-# =========================================================
-# FASTAPI APPLICATION
-# =========================================================
+load_dotenv()
 
 app = FastAPI(
-    title="Rakshak",
-    description="AI-Powered DevSecOps Threat Detection Platform",
+    title="Rakshak AI-Powered DevSecOps Threat Detection Platform",
     version="1.0.0",
 )
 
-# Configure CORS for frontend web application
+# Compatibility bookkeeping only; durable PostgreSQL delivery uniqueness is
+# the source of truth for deduplication.
+_processed_deliveries: set[str] = set()
+
+
+# ============================================================
+# CORS
+# ============================================================
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:8000",
-        "http://127.0.0.1:8000",
+        item.strip()
+        for item in os.getenv(
+            "CORS_ALLOWED_ORIGINS",
+            "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000",
+        ).split(",")
+        if item.strip()
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -45,722 +87,1936 @@ app.add_middleware(
 )
 
 
-# =========================================================
-# REQUEST/RESPONSE MODELS
-# =========================================================
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; connect-src 'self' http://localhost:5173 http://127.0.0.1:5173 "
+        "http://localhost:8000 http://127.0.0.1:8000; img-src 'self' data: https:; "
+        "style-src 'self' 'unsafe-inline'; script-src 'self'"
+    )
+    if is_production() and request.url.scheme == "https":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
+
+
+# ============================================================
+# SESSION
+# ============================================================
+
+SESSION_SECRET = os.getenv("SESSION_SECRET")
+
+if not SESSION_SECRET:
+    raise RuntimeError("SESSION_SECRET is not set")
+
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=SESSION_SECRET,
+    https_only=os.getenv("SESSION_COOKIE_SECURE", str(is_production())).lower() == "true",
+    same_site="lax",
+)
+
+
+# ============================================================
+# IDENTITY & WORKSPACE OWNERSHIP
+# ============================================================
+
+def upsert_github_user(db: Session, github_user: dict) -> User:
+    """Create or update the Rakshak workspace User for a GitHub identity.
+
+    Identity key: ``github_user_id`` (GitHub's stable numeric ID, UNIQUE).
+    ``github_login`` is display metadata only and is never an identity key.
+    Repeated OAuth logins never create duplicate users.
+    """
+    github_user_id = github_user.get("id")
+
+    if github_user_id in (None, ""):
+        raise HTTPException(
+            status_code=502,
+            detail="GitHub user id missing",
+        )
+
+    try:
+        github_user_id = int(github_user_id)
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status_code=502,
+            detail="GitHub user id is invalid",
+        )
+
+    github_login = str(github_user.get("login") or f"github-{github_user_id}")
+    now = datetime.utcnow()
+
+    user = (
+        db.query(User)
+        .filter(User.github_user_id == github_user_id)
+        .first()
+    )
+
+    if user is None:
+        user = User(
+            github_user_id=github_user_id,
+            github_login=github_login,
+            name=github_user.get("name"),
+            avatar_url=github_user.get("avatar_url"),
+            html_url=github_user.get("html_url"),
+            created_at=now,
+            last_seen_at=now,
+        )
+        db.add(user)
+    else:
+        user.github_login = github_login
+        user.name = github_user.get("name")
+        user.avatar_url = github_user.get("avatar_url")
+        user.html_url = github_user.get("html_url")
+        user.last_seen_at = now
+
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+def get_current_user(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> User:
+    """Resolve the authenticated Rakshak workspace from the session.
+
+    The session stores the internal Rakshak ``User.id`` (never a frontend
+    supplied ID). Returns 401 when there is no valid authenticated workspace.
+    """
+    user_pk = request.session.get("user_pk")
+
+    user = None
+    if user_pk is not None:
+        try:
+            user = (
+                db.query(User)
+                .filter(User.id == int(user_pk))
+                .first()
+            )
+        except (TypeError, ValueError):
+            user = None
+
+    if user is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required",
+        )
+
+    return user
+
+
+def _resolve_webhook_workspace(
+    db: Session,
+    installation_id: int | None,
+    repository_full_name: str | None,
+) -> int | None:
+    """Resolve the owning Rakshak workspace for an inbound webhook event.
+
+    Resolution order:
+      1. GitHub App installation -> workspace mapping (authoritative).
+      2. Repository -> workspace mapping, only when the repository is
+         associated with EXACTLY ONE workspace (never ambiguous).
+
+    The GitHub repository owner's login is NEVER used as a Rakshak identity.
+    Returns ``None`` when ownership cannot be safely established.
+    """
+    if installation_id:
+        try:
+            link = (
+                db.query(UserInstallation)
+                .filter(UserInstallation.installation_id == int(installation_id))
+                .first()
+            )
+            if link is not None:
+                return link.user_id
+        except (TypeError, ValueError):
+            pass
+
+    if repository_full_name:
+        rows = (
+            db.query(UserRepository.user_id)
+            .filter(UserRepository.repository_full_name == repository_full_name)
+            .distinct()
+            .all()
+        )
+        user_ids = {row[0] for row in rows}
+        if len(user_ids) == 1:
+            return user_ids.pop()
+
+    return None
+
+
+def _link_manual_scan_workspace(
+    db: Session,
+    user: User,
+    owner: str,
+    repo: str,
+) -> None:
+    """Record the workspace/repository (and installation) mapping after a
+    successful manual OAuth repository scan.
+
+    The installation ID is resolved through GitHub's API (App JWT) — never
+    invented. Best-effort only: mapping failures never fail the scan request.
+    """
+    repository_full_name = f"{owner}/{repo}"
+    now = datetime.utcnow()
+
+    try:
+        repo_link = (
+            db.query(UserRepository)
+            .filter(
+                UserRepository.user_id == user.id,
+                UserRepository.repository_full_name == repository_full_name,
+            )
+            .first()
+        )
+
+        if repo_link is None:
+            repo_link = UserRepository(
+                user_id=user.id,
+                repository_full_name=repository_full_name,
+                created_at=now,
+                last_seen_at=now,
+            )
+            db.add(repo_link)
+        else:
+            repo_link.last_seen_at = now
+
+        installation_id = get_repository_installation(owner, repo)
+
+        if installation_id:
+            installation_link = (
+                db.query(UserInstallation)
+                .filter(UserInstallation.installation_id == installation_id)
+                .first()
+            )
+
+            if installation_link is None:
+                installation_link = UserInstallation(
+                    installation_id=installation_id,
+                    user_id=user.id,
+                    created_at=now,
+                    last_seen_at=now,
+                )
+                db.add(installation_link)
+                repo_link.installation_id = installation_id
+            elif installation_link.user_id == user.id:
+                installation_link.last_seen_at = now
+                repo_link.installation_id = installation_id
+            # An installation already mapped to a different workspace is left
+            # untouched (first workspace to establish the mapping owns it).
+
+        db.commit()
+
+    except Exception as exc:
+        db.rollback()
+        logger.warning(
+            "[Workspace] Failed to record repository/installation mapping for %s/%s: %s",
+            owner,
+            repo,
+            str(exc),
+        )
+
+
+# ============================================================
+# MODELS
+# ============================================================
 
 class ScanRequest(BaseModel):
-    """
-    Request model for /api/scan endpoint.
-    
-    At least one scan type must be enabled.
-    """
-    
-    code_scanning: bool = False
-    dependency_scanning: bool = False
-    secret_detection: bool = False
+    target_path: str = Field(min_length=1, max_length=500)
+    code_scanning: bool = True
+    dependency_scanning: bool = True
+    secret_detection: bool = True
     container_scanning: bool = False
-    
-    @field_validator("code_scanning", "dependency_scanning", "secret_detection", "container_scanning", mode="after")
+    container_image: str | None = Field(default=None, max_length=300)
+
+    @field_validator("target_path")
     @classmethod
-    def validate_at_least_one_selected(cls, v):
-        """Validator is applied per field, so we need to check in __init__"""
-        return v
-    
-    def __init__(self, **data):
-        super().__init__(**data)
-        if not any([
-            self.code_scanning,
-            self.dependency_scanning,
-            self.secret_detection,
-            self.container_scanning,
-        ]):
-            raise ValueError(
-                "At least one security scan must be selected."
-            )
+    def validate_target_path(cls, value: str) -> str:
+        path = Path(value).expanduser()
+        if not is_within_allowed_root(path):
+            raise ValueError("target_path is outside the configured scan roots")
+        return str(path)
+
+    @field_validator("container_image")
+    @classmethod
+    def validate_container_image(cls, value: str | None) -> str | None:
+        if value and (any(char.isspace() for char in value) or any(char in value for char in ";&|$`\n\r")):
+            raise ValueError("container_image contains invalid characters")
+        return value
 
 
-# =========================================================
-# API DATA LOADING
-# =========================================================
+class GitHubScanRequest(BaseModel):
+    owner: str = Field(min_length=1, max_length=100)
+    repo: str = Field(min_length=1, max_length=100)
+    ref: str | None = Field(default=None, max_length=255)
+    code_scanning: bool = True
+    dependency_scanning: bool = True
+    secret_detection: bool = True
+    container_scanning: bool = False
+    container_image: str | None = Field(default=None, max_length=300)
 
-def load_findings(
-    use_ai: bool = False,
-    code_scanning: bool = True,
-    dependency_scanning: bool = True,
-    secret_detection: bool = True,
-    container_scanning: bool = True,
-):
-    """
-    Run selected security parsers and return
-    prioritized + analyzed findings.
+    @field_validator("owner", "repo")
+    @classmethod
+    def validate_github_name(cls, value: str) -> str:
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+", value):
+            raise ValueError("invalid GitHub owner or repository name")
+        return value
 
-    Parameters:
-        use_ai: Enable Cloudflare Workers AI analysis
-        code_scanning: Run static code analysis
-        dependency_scanning: Run Trivy filesystem/dependency scan
-        secret_detection: Run Gitleaks secret scan
-        container_scanning: Run Trivy Docker image scan
+    @field_validator("ref")
+    @classmethod
+    def validate_ref(cls, value: str | None) -> str | None:
+        if value and (".." in value or "\x00" in value or any(char in value for char in "\r\n")):
+            raise ValueError("invalid Git ref")
+        return value
 
-    Returns:
-        List of enriched SecurityFinding dictionaries
-    """
-
-    trivy_report = (
-        "reports/trivy-results.json"
-    )
-
-    trivy_image_report = (
-        "reports/trivy-image-results.json"
-    )
-
-    gitleaks_report = (
-        "reports/gitleaks-results.json"
-    )
-
-    all_findings = []
-
-    # =====================================================
-    # CODE SCANNING (Static Analysis)
-    # =====================================================
-
-    if code_scanning:
-        # Note: Code scanner requires actual source code.
-        # In the current implementation, we don't have a code submission endpoint.
-        # This is a placeholder for future integration.
-        pass
-
-    # =====================================================
-    # TRIVY FILESYSTEM / DEPENDENCY SCAN
-    # =====================================================
-
-    if dependency_scanning:
-        trivy_findings = parse_trivy_report(
-            trivy_report
-        )
-        all_findings.extend(trivy_findings)
-
-    # =====================================================
-    # TRIVY DOCKER IMAGE SCAN
-    # =====================================================
-
-    if container_scanning:
-        trivy_image_findings = parse_trivy_report(
-            trivy_image_report
-        )
-        all_findings.extend(trivy_image_findings)
-
-    # =====================================================
-    # GITLEAKS SECRET SCAN
-    # =====================================================
-
-    if secret_detection:
-        try:
-            gitleaks_findings = parse_gitleaks_report(
-                gitleaks_report
-            )
-            all_findings.extend(gitleaks_findings)
-        except FileNotFoundError:
-            # Gitleaks report may not exist
-            print(f"[INFO] Gitleaks report not found: {gitleaks_report}")
-
-    # =====================================================
-    # RISK SCORING + PRIORITIZATION
-    # =====================================================
-
-    prioritized_findings = prioritize_findings(
-        all_findings
-    )
-
-    # =====================================================
-    # AI ANALYSIS
-    # =====================================================
-
-    enriched_findings = []
-
-    for finding in prioritized_findings:
-
-        try:
-
-            analyzed = analyze_finding(
-                finding,
-                use_ai=use_ai,
-            )
-
-            if isinstance(
-                analyzed,
-                dict,
-            ):
-                finding = analyzed
-
-        except Exception as exc:
-
-            print(
-                f"[WARNING] AI analysis failed: {exc}"
-            )
-
-        enriched_findings.append(
-            finding
-        )
-
-    return enriched_findings
+    @field_validator("container_image")
+    @classmethod
+    def validate_github_container_image(cls, value: str | None) -> str | None:
+        if value and (any(char.isspace() for char in value) or any(char in value for char in ";&|$`\n\r")):
+            raise ValueError("container_image contains invalid characters")
+        return value
 
 
-# =========================================================
-# ROOT
-# =========================================================
-
-@app.get("/")
-def home():
-
-    return {
-        "message": "Rakshak DevSecOps Platform",
-        "status": "running",
-        "version": "1.0.0",
-    }
+def _validate_github_name(value: str, label: str) -> str:
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,100}", value or ""):
+        raise HTTPException(status_code=422, detail=f"Invalid GitHub {label}")
+    return value
 
 
-# =========================================================
+def _validate_untrusted_ref(value: str | None) -> str | None:
+    if value and (len(value) > 255 or ".." in value or "\x00" in value or any(char in value for char in "\r\n")):
+        raise HTTPException(status_code=422, detail="Invalid Git ref")
+    return value
+
+
+# ============================================================
 # HEALTH
-# =========================================================
+# ============================================================
 
 @app.get("/health")
 def health():
-
     return {
         "status": "healthy",
+        "service": "rakshak-backend",
     }
 
 
-# =========================================================
-# SUMMARY
-# =========================================================
+@app.get("/ready")
+def readiness(db: Session = Depends(get_db)):
+    """Lightweight readiness probe that checks database connectivity only."""
+    try:
+        db.execute(text("SELECT 1"))
+    except Exception:
+        raise HTTPException(status_code=503, detail="Database is unavailable")
+    return {"status": "ready", "database": "ok"}
 
-@app.get("/api/summary")
-def get_summary():
 
-    # AI is disabled here so the dashboard
-    # can load quickly.
+# ============================================================
+# GITHUB OAUTH
+# ============================================================
 
-    findings = load_findings(
-        use_ai=False
-    )
+@app.get("/api/auth/github")
+def github_login():
+    client_id = os.getenv("GITHUB_CLIENT_ID")
+    redirect_uri = os.getenv("GITHUB_REDIRECT_URI")
 
-    critical = sum(
-        1
-        for finding in findings
-        if str(
-            finding.get(
-                "priority",
-                "",
-            )
-        ).upper() == "CRITICAL"
-    )
-
-    high = sum(
-        1
-        for finding in findings
-        if str(
-            finding.get(
-                "priority",
-                "",
-            )
-        ).upper() == "HIGH"
-    )
-
-    medium = sum(
-        1
-        for finding in findings
-        if str(
-            finding.get(
-                "priority",
-                "",
-            )
-        ).upper() == "MEDIUM"
-    )
-
-    low = sum(
-        1
-        for finding in findings
-        if str(
-            finding.get(
-                "priority",
-                "",
-            )
-        ).upper() == "LOW"
-    )
-
-    if findings:
-
-        overall_risk = round(
-            sum(
-                finding.get(
-                    "risk_score",
-                    0,
-                )
-                for finding in findings
-            )
-            / len(findings)
+    if not client_id or not redirect_uri:
+        raise HTTPException(
+            status_code=500,
+            detail="GitHub OAuth configuration is missing",
         )
 
-    else:
+    params = urllib.parse.urlencode(
+        {
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+            "scope": "repo read:user user:email",
+        }
+    )
 
-        overall_risk = 0
+    github_url = (
+        "https://github.com/login/oauth/authorize?"
+        + params
+    )
+
+    return RedirectResponse(url=github_url)
+
+
+@app.get("/api/auth/github/callback")
+def github_callback(
+    request: Request,
+    code: str | None = None,
+    db: Session = Depends(get_db),
+):
+    if not code:
+        raise HTTPException(
+            status_code=400,
+            detail="GitHub authorization code is missing",
+        )
+
+    client_id = os.getenv("GITHUB_CLIENT_ID")
+    client_secret = os.getenv("GITHUB_CLIENT_SECRET")
+    redirect_uri = os.getenv("GITHUB_REDIRECT_URI")
+
+    if not client_id or not client_secret or not redirect_uri:
+        raise HTTPException(
+            status_code=500,
+            detail="GitHub OAuth configuration is missing",
+        )
+
+    token_data = urllib.parse.urlencode(
+        {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "code": code,
+            "redirect_uri": redirect_uri,
+        }
+    ).encode()
+
+    token_request = urllib.request.Request(
+        "https://github.com/login/oauth/access_token",
+        data=token_data,
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "Rakshak",
+        },
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(
+            token_request,
+            timeout=30,
+        ) as response:
+            token_response = json.loads(
+                response.read().decode()
+            )
+
+    except urllib.error.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="GitHub token exchange failed",
+        )
+
+    access_token = token_response.get("access_token")
+
+    if not access_token:
+        raise HTTPException(
+            status_code=502,
+            detail="GitHub did not return an access token",
+        )
+
+    # Current local-development implementation.
+    request.session["github_access_token"] = access_token
+
+    # Get GitHub user information.
+    user_request = urllib.request.Request(
+        "https://api.github.com/user",
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "Rakshak",
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(
+            user_request,
+            timeout=30,
+        ) as response:
+            github_user = json.loads(
+                response.read().decode()
+            )
+
+    except urllib.error.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Failed to fetch GitHub user",
+        )
+
+    request.session["github_user"] = {
+        "id": github_user.get("id"),
+        "login": github_user.get("login"),
+        "name": github_user.get("name"),
+        "avatar_url": github_user.get("avatar_url"),
+        "html_url": github_user.get("html_url"),
+    }
+
+    # Upsert the Rakshak workspace User keyed by the stable GitHub user ID,
+    # then store the INTERNAL Rakshak User.id in the session. Frontend-supplied
+    # identities are never trusted; authorization always resolves this way.
+    user = upsert_github_user(db, github_user)
+    request.session["user_pk"] = user.id
+
+    return RedirectResponse(
+        url="http://127.0.0.1:5173/dashboard"
+    )
+
+
+@app.get("/api/auth/me")
+def auth_me(request: Request):
+    user = request.session.get("github_user")
+
+    if not user:
+        return {
+            "authenticated": False,
+            "user": None,
+        }
 
     return {
-        "total_findings": len(findings),
-        "critical": critical,
-        "high": high,
-        "medium": medium,
-        "low": low,
-        "overall_risk_score": overall_risk,
+        "authenticated": True,
+        "user": user,
     }
 
 
-# =========================================================
-# FINDINGS
-# =========================================================
+@app.post("/api/auth/logout")
+def github_logout(request: Request):
+    request.session.clear()
 
-@app.get("/api/findings")
-def get_findings(
-    severity: Optional[str] = None,
-    priority: Optional[str] = None,
-    tool: Optional[str] = None,
-    search: Optional[str] = None,
-):
+    return {
+        "success": True,
+        "message": "Logged out successfully",
+    }
 
-    # AI is disabled here.
-    # This endpoint is designed for the frontend
-    # dashboard and returns compact finding information.
 
-    findings = load_findings(
-        use_ai=False
+# ============================================================
+# GITHUB REPOSITORIES
+# ============================================================
+
+@app.get("/api/github/repos")
+def github_repositories(request: Request):
+    access_token = request.session.get(
+        "github_access_token"
     )
 
-    # =====================================================
-    # SEVERITY FILTER
-    # =====================================================
+    if not access_token:
+        raise HTTPException(
+            status_code=401,
+            detail="GitHub authentication required",
+        )
 
-    if severity:
+    url = (
+        "https://api.github.com/user/repos"
+        "?per_page=100"
+        "&sort=updated"
+        "&affiliation=owner,collaborator,organization_member"
+    )
 
-        severity = severity.upper()
+    github_request = urllib.request.Request(
+        url,
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "Rakshak",
+        },
+    )
 
-        findings = [
-            finding
-            for finding in findings
-            if str(
-                finding.get(
-                    "severity",
-                    "",
-                )
-            ).upper() == severity
-        ]
-
-    # =====================================================
-    # PRIORITY FILTER
-    # =====================================================
-
-    if priority:
-
-        priority = priority.upper()
-
-        findings = [
-            finding
-            for finding in findings
-            if str(
-                finding.get(
-                    "priority",
-                    "",
-                )
-            ).upper() == priority
-        ]
-
-    # =====================================================
-    # TOOL FILTER
-    # =====================================================
-
-    if tool:
-
-        tool_lower = tool.lower()
-
-        findings = [
-            finding
-            for finding in findings
-            if str(
-                finding.get(
-                    "tool",
-                    "",
-                )
-            ).lower() == tool_lower
-        ]
-
-    # =====================================================
-    # SEARCH
-    # =====================================================
-
-    if search:
-
-        search_lower = search.lower()
-
-        findings = [
-            finding
-            for finding in findings
-            if (
-                search_lower
-                in str(
-                    finding.get(
-                        "title",
-                        "",
-                    )
-                ).lower()
+    try:
+        with urllib.request.urlopen(
+            github_request,
+            timeout=30,
+        ) as response:
+            repositories = json.loads(
+                response.read().decode()
             )
-            or (
-                search_lower
-                in str(
-                    finding.get(
-                        "vulnerability_id",
-                        "",
-                    )
-                ).lower()
-            )
-            or (
-                search_lower
-                in str(
-                    finding.get(
-                        "description",
-                        "",
-                    )
-                ).lower()
-            )
-            or (
-                search_lower
-                in str(
-                    finding.get(
-                        "target",
-                        "",
-                    )
-                ).lower()
-            )
-        ]
 
-    # =====================================================
-    # COMPACT FINDINGS
-    # =====================================================
+    except urllib.error.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="GitHub repository request failed",
+        )
 
-    compact_findings = []
+    result = []
 
-    for finding in findings:
-
-        compact_findings.append(
+    for repo in repositories:
+        result.append(
             {
-                "vulnerability_id": finding.get(
-                    "vulnerability_id",
-                    "",
-                ),
-
-                "title": finding.get(
-                    "title",
-                    "",
-                ),
-
-                "severity": finding.get(
-                    "severity",
-                    "UNKNOWN",
-                ),
-
-                "priority": finding.get(
-                    "priority",
-                    "LOW",
-                ),
-
-                "risk_score": finding.get(
-                    "risk_score",
-                    0,
-                ),
-
-                "tool": finding.get(
-                    "tool",
-                    "",
-                ),
-
-                "target": finding.get(
-                    "target",
-                    "",
-                ),
-
-                "affected_packages": finding.get(
-                    "affected_packages",
-                    [],
-                ),
-
-                "affected_package_count": finding.get(
-                    "affected_package_count",
-                    0,
-                ),
-
-                "fixed_version": finding.get(
-                    "fixed_version",
-                    "",
-                ),
-
-                "fix_available": finding.get(
-                    "fix_available",
-                    False,
-                ),
-
-                "exploitability": finding.get(
-                    "exploitability",
-                    0,
-                ),
-
-                "production": finding.get(
-                    "production",
-                    True,
+                "id": repo.get("id"),
+                "name": repo.get("name"),
+                "full_name": repo.get("full_name"),
+                "private": repo.get("private"),
+                "description": repo.get("description"),
+                "html_url": repo.get("html_url"),
+                "clone_url": repo.get("clone_url"),
+                "default_branch": repo.get("default_branch"),
+                "language": repo.get("language"),
+                "updated_at": repo.get("updated_at"),
+                "owner": (
+                    repo.get("owner", {}).get("login")
                 ),
             }
         )
 
     return {
-        "total": len(compact_findings),
-        "findings": compact_findings,
+        "total": len(result),
+        "repositories": result,
     }
 
 
-# =========================================================
-# SINGLE VULNERABILITY
-# =========================================================
+# ============================================================
+# GITHUB REPOSITORY INFORMATION
+# ============================================================
 
-@app.get(
-    "/api/findings/{vulnerability_id}"
-)
-def get_finding(
-    vulnerability_id: str,
+@app.get("/api/github/repos/{owner}/{repo}")
+def github_repository(
+    request: Request,
+    owner: str,
+    repo: str,
 ):
-
-    # Keep this endpoint fast.
-    findings = load_findings(
-        use_ai=False
+    _validate_github_name(owner, "owner")
+    _validate_github_name(repo, "repository")
+    access_token = request.session.get(
+        "github_access_token"
     )
 
-    vulnerability_id = (
-        vulnerability_id.upper()
-    )
+    if not access_token:
+        raise HTTPException(
+            status_code=401,
+            detail="GitHub authentication required",
+        )
 
-    for finding in findings:
+    try:
+        repository = get_repository(
+            access_token,
+            owner,
+            repo,
+        )
 
-        current_id = str(
-            finding.get(
-                "vulnerability_id",
-                "",
-            )
-        ).upper()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="GitHub repository request failed",
+        )
 
-        if current_id == vulnerability_id:
+    return {
+        "repository": {
+            "id": repository.get("id"),
+            "name": repository.get("name"),
+            "full_name": repository.get("full_name"),
+            "private": repository.get("private"),
+            "description": repository.get("description"),
+            "html_url": repository.get("html_url"),
+            "default_branch": repository.get("default_branch"),
+            "language": repository.get("language"),
+            "owner": (
+                repository.get("owner", {}).get("login")
+            ),
+        }
+    }
 
-            return finding
 
-    raise HTTPException(
-        status_code=404,
-        detail="Vulnerability not found",
-    )
-
-
-# =========================================================
-# SCAN ORCHESTRATION API
-# =========================================================
+# ============================================================
+# LOCAL SCAN
+# ============================================================
 
 @app.post("/api/scan")
-def orchestrate_scan(request: ScanRequest):
-    """
-    Orchestrate security scans based on user selection.
-    
-    Accepts:
-        {
-            "code_scanning": bool,
-            "dependency_scanning": bool,
-            "secret_detection": bool,
-            "container_scanning": bool
-        }
-    
-    At least one scan type must be selected.
-    
-    Returns aggregated findings with scan metadata.
-    """
-    
-    # Validate at least one scan is selected
-    try:
-        # The validation is done in ScanRequest.__init__
-        pass
-    except ValueError as e:
+def scan_project(
+    scan_request: ScanRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    target_path = scan_request.target_path
+
+    if not os.path.exists(target_path):
         raise HTTPException(
-            status_code=422,
-            detail=str(e),
+            status_code=404,
+            detail=f"Scan target not found: {target_path}",
         )
-    
-    # Generate unique scan ID
+
     scan_id = str(uuid.uuid4())
-    
-    # Execute selected scans
+
+    scan = Scan(
+        id=scan_id,
+        target_path=target_path,
+        event_type="local",
+        status="running",
+        code_scanning=scan_request.code_scanning,
+        dependency_scanning=scan_request.dependency_scanning,
+        secret_detection=scan_request.secret_detection,
+        container_scanning=scan_request.container_scanning,
+        total_findings=0,
+        critical_count=0,
+        high_count=0,
+        medium_count=0,
+        low_count=0,
+        overall_risk=0,
+        started_at=datetime.utcnow(),
+        user_id=current_user.id,
+    )
+
+    db.add(scan)
+    db.commit()
+
+    all_findings = []
+
     try:
-        findings = load_findings(
-            use_ai=False,
-            code_scanning=request.code_scanning,
-            dependency_scanning=request.dependency_scanning,
-            secret_detection=request.secret_detection,
-            container_scanning=request.container_scanning,
-        )
-    except Exception as e:
-        return {
-            "status": "failed",
-            "scan_id": scan_id,
-            "errors": [
-                {
-                    "scanner": "orchestration",
-                    "message": f"Failed to orchestrate scans: {str(e)}",
-                }
-            ],
-        }
-    
-    # Calculate severity counts
-    critical_count = sum(
-        1
-        for finding in findings
-        if str(finding.get("priority", "")).upper() == "CRITICAL"
-    )
-    
-    high_count = sum(
-        1
-        for finding in findings
-        if str(finding.get("priority", "")).upper() == "HIGH"
-    )
-    
-    medium_count = sum(
-        1
-        for finding in findings
-        if str(finding.get("priority", "")).upper() == "MEDIUM"
-    )
-    
-    low_count = sum(
-        1
-        for finding in findings
-        if str(finding.get("priority", "")).upper() == "LOW"
-    )
-    
-    # Calculate overall risk score
-    if findings:
-        overall_risk_score = round(
-            sum(
-                finding.get("risk_score", 0)
-                for finding in findings
+        # ----------------------------------------------------
+        # CODE SCANNING
+        # ----------------------------------------------------
+
+        if scan_request.code_scanning:
+            code_findings = run_code_scan(
+                target_path
             )
-            / len(findings)
+
+            all_findings.extend((finding, "code") for finding in code_findings)
+
+        # ----------------------------------------------------
+        # DEPENDENCY SCANNING
+        # ----------------------------------------------------
+
+        if scan_request.dependency_scanning:
+            dependency_findings = run_dependency_scan(
+                target_path
+            )
+
+            all_findings.extend((finding, "dependency") for finding in dependency_findings)
+
+        # ----------------------------------------------------
+        # SECRET DETECTION
+        # ----------------------------------------------------
+
+        if scan_request.secret_detection:
+            secret_findings = run_secret_scan(
+                target_path
+            )
+
+            all_findings.extend((finding, "secret") for finding in secret_findings)
+
+        # ----------------------------------------------------
+        # CONTAINER SCANNING
+        # ----------------------------------------------------
+
+        if scan_request.container_scanning:
+
+            if not scan_request.container_image:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "container_image is required "
+                        "when container_scanning is enabled"
+                    ),
+                )
+
+            container_findings = run_container_scan(
+                scan_request.container_image
+            )
+
+            all_findings.extend((finding, "container") for finding in container_findings)
+
+        # ----------------------------------------------------
+        # SAVE FINDINGS
+        # ----------------------------------------------------
+
+        critical_count = 0
+        high_count = 0
+        medium_count = 0
+        low_count = 0
+
+        total_risk = 0
+
+        finding_models = []
+        for finding, scanner_type in all_findings:
+
+            if hasattr(finding, "__dict__"):
+                finding_data = finding.__dict__.copy()
+
+            else:
+                finding_data = dict(finding)
+
+            # Remove SQLAlchemy internal field if present.
+            finding_data.pop("_sa_instance_state", None)
+
+            # ------------------------------------------------
+            # AI / RULE-BASED ANALYSIS
+            # ------------------------------------------------
+
+            try:
+                enriched = analyze_finding(
+                    finding_data,
+                    use_ai=False,
+                )
+            except TypeError:
+                enriched = analyze_finding(
+                    finding_data
+                )
+
+            severity = str(
+                enriched.get(
+                    "severity",
+                    "low",
+                )
+            ).lower()
+
+            if severity == "critical":
+                critical_count += 1
+            elif severity == "high":
+                high_count += 1
+            elif severity == "medium":
+                medium_count += 1
+            else:
+                low_count += 1
+
+            risk_score = float(
+                enriched.get(
+                    "risk_score",
+                    0,
+                )
+                or 0
+            )
+
+            total_risk += risk_score
+
+            finding_model = Finding(
+                scan_id=scan_id,
+                scanner_type=scanner_type,
+                vulnerability_id=str(
+                    enriched.get(
+                        "vulnerability_id",
+                        "",
+                    )
+                ),
+                title=str(
+                    enriched.get(
+                        "title",
+                        "",
+                    )
+                ),
+                description=str(
+                    enriched.get(
+                        "description",
+                        "",
+                    )
+                ),
+                tool=str(
+                    enriched.get(
+                        "tool",
+                        "",
+                    )
+                ),
+                severity=severity,
+                priority=str(
+                    enriched.get(
+                        "priority",
+                        "",
+                    )
+                ),
+                risk_score=risk_score,
+                exploitability=float(
+                    enriched.get(
+                        "exploitability",
+                        0,
+                    )
+                    or 0
+                ),
+                target=str(
+                    enriched.get(
+                        "target",
+                        "",
+                    )
+                ),
+                package_name=str(
+                    enriched.get(
+                        "package_name",
+                        "",
+                    )
+                ),
+                installed_version=str(
+                    enriched.get(
+                        "installed_version",
+                        "",
+                    )
+                ),
+                fixed_version=str(
+                    enriched.get(
+                        "fixed_version",
+                        "",
+                    )
+                ),
+                fix_available=bool(
+                    enriched.get(
+                        "fix_available",
+                        False,
+                    )
+                ),
+                production=bool(
+                    enriched.get(
+                        "production",
+                        False,
+                    )
+                ),
+                affected_packages=enriched.get(
+                    "affected_packages"
+                ),
+                ai_explanation="",
+                potential_impact="",
+                recommended_action="",
+                risk_summary="",
+            )
+
+            db.add(finding_model)
+            finding_models.append(finding_model)
+
+        # ----------------------------------------------------
+        # RISK CALCULATION
+        # ----------------------------------------------------
+
+        total_findings = len(all_findings)
+
+        if total_findings > 0:
+            overall_risk = round(
+                total_risk / total_findings,
+                2,
+            )
+        else:
+            overall_risk = 0
+
+        # ----------------------------------------------------
+        # COMPLETE SCAN
+        # ----------------------------------------------------
+
+        scan.status = "completed"
+        scan.total_findings = total_findings
+        scan.critical_count = critical_count
+        scan.high_count = high_count
+        scan.medium_count = medium_count
+        scan.low_count = low_count
+        scan.overall_risk = overall_risk
+        scan.completed_at = datetime.utcnow()
+
+        process_completed_scan_lifecycle(db, scan, finding_models)
+        persist_security_gate(db, scan)
+
+        db.commit()
+
+        return {
+            "scan_id": scan_id,
+            "status": "completed",
+            "target_path": target_path,
+            "total_findings": total_findings,
+            "critical": critical_count,
+            "high": high_count,
+            "medium": medium_count,
+            "low": low_count,
+            "overall_risk": overall_risk,
+            "code_scanning": scan_request.code_scanning,
+            "dependency_scanning": scan_request.dependency_scanning,
+            "secret_detection": scan_request.secret_detection,
+            "container_scanning": scan_request.container_scanning,
+        }
+
+    except HTTPException:
+        db.rollback()
+        scan = db.query(Scan).filter(Scan.id == scan_id).first()
+        scan.status = "failed"
+        scan.completed_at = datetime.utcnow()
+        db.commit()
+        raise
+
+    except Exception as exc:
+        db.rollback()
+        scan = db.query(Scan).filter(Scan.id == scan_id).first()
+        scan.status = "failed"
+        scan.completed_at = datetime.utcnow()
+        db.commit()
+
+        raise HTTPException(
+            status_code=500,
+            detail=f"Scan failed: {str(exc)}",
         )
-    else:
-        overall_risk_score = 0
-    
+
+
+# ============================================================
+# GITHUB REPOSITORY SCAN
+# ============================================================
+
+@app.post("/api/github/scan")
+def scan_github_repository(
+    scan_request: GitHubScanRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Manual GitHub repository scan — authenticated via OAuth session.
+
+    Ownership is taken from the authenticated Rakshak workspace (never from
+    the frontend). The repository/installation mapping used for later webhook
+    ownership resolution is recorded best-effort after a successful scan.
+    """
+    access_token = request.session.get(
+        "github_access_token"
+    )
+
+    if not access_token:
+        raise HTTPException(
+            status_code=401,
+            detail="GitHub authentication required",
+        )
+
+    owner = scan_request.owner
+    repo = scan_request.repo
+
+    # Verify repository access and resolve default branch
+    try:
+        repository = get_repository(access_token, owner, repo)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    default_branch = repository.get("default_branch")
+    ref = scan_request.ref or default_branch
+
+    # Validate container_image before starting the scan
+    if scan_request.container_scanning and not scan_request.container_image:
+        raise HTTPException(
+            status_code=400,
+            detail="container_image is required when container_scanning is enabled",
+        )
+
+    try:
+        scan_id = run_github_repository_scan(
+            db=db,
+            owner=owner,
+            repo=repo,
+            ref=ref,
+            access_token=access_token,
+            code_scanning=scan_request.code_scanning,
+            dependency_scanning=scan_request.dependency_scanning,
+            secret_detection=scan_request.secret_detection,
+            container_scanning=scan_request.container_scanning,
+            container_image=scan_request.container_image,
+            trigger="manual",
+            owner_user_id=current_user.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"GitHub repository scan failed: {str(exc)}",
+        )
+
+    # Best-effort: resolve the real GitHub App installation through GitHub and
+    # record the workspace -> repository / installation mappings so later
+    # webhook events can be safely attributed to this workspace.
+    _link_manual_scan_workspace(db, current_user, owner, repo)
+
+    # Retrieve completed scan for response
+    scan = db.query(Scan).filter(Scan.id == scan_id).first()
+
     return {
         "scan_id": scan_id,
-        "selected_scans": {
-            "code_scanning": request.code_scanning,
-            "dependency_scanning": request.dependency_scanning,
-            "secret_detection": request.secret_detection,
-            "container_scanning": request.container_scanning,
-        },
-        "status": "completed",
-        "findings": findings,
-        "total_findings": len(findings),
-        "critical": critical_count,
-        "high": high_count,
-        "medium": medium_count,
-        "low": low_count,
-        "overall_risk_score": overall_risk_score,
+        "status": scan.status if scan else "completed",
+        "repository": f"{owner}/{repo}",
+        "ref": ref,
+        "total_findings": scan.total_findings if scan else 0,
+        "critical": scan.critical_count if scan else 0,
+        "high": scan.high_count if scan else 0,
+        "medium": scan.medium_count if scan else 0,
+        "low": scan.low_count if scan else 0,
+        "overall_risk": scan.overall_risk if scan else 0,
+        "security_gate_status": scan.security_gate_status if scan else None,
+        "security_gate_reason": scan.security_gate_reason if scan else None,
+        "code_scanning": scan_request.code_scanning,
+        "dependency_scanning": scan_request.dependency_scanning,
+        "secret_detection": scan_request.secret_detection,
+        "container_scanning": scan_request.container_scanning,
     }
 
 
-# =========================================================
-# AI ANALYSIS FOR A SINGLE FINDING
-# =========================================================
+# ============================================================
+# SCAN HISTORY ENDPOINTS
+# ============================================================
 
-@app.get(
-    "/api/findings/{vulnerability_id}/analyze"
-)
+@app.get("/api/scans")
+def get_scans(
+    repository: str | None = None,
+    status: str | None = None,
+    event_type: str | None = None,
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Retrieve paginated scan history with optional filtering.
+
+    Workspace-scoped: only scans owned by the authenticated user are returned.
+    Historical/system records with NULL ownership are hidden.
+    Ordered by newest scans first (started_at DESC).
+    Safe parameterized filtering for repository, status, and event_type.
+    """
+    query = db.query(Scan).filter(Scan.user_id == current_user.id)
+
+    if repository:
+        # Match against either explicit repository column or target_path
+        query = query.filter(
+            or_(
+                Scan.repository == repository,
+                Scan.target_path == f"github.com/{repository}",
+                Scan.target_path == repository,
+            )
+        )
+
+    if status:
+        query = query.filter(Scan.status == status)
+
+    if event_type:
+        query = query.filter(Scan.event_type == event_type)
+
+    total = query.count()
+    scans = (
+        query.order_by(Scan.started_at.desc(), Scan.id.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+
+    items = []
+    for s in scans:
+        resolved_repo = s.repository
+        if not resolved_repo and s.target_path.startswith("github.com/"):
+            resolved_repo = s.target_path[len("github.com/"):]
+
+        items.append(
+            {
+                "scan_id": s.id,
+                "repository": resolved_repo,
+                "target_path": s.target_path,
+                "status": s.status,
+                "event_type": s.event_type or "unknown",
+                "ref": s.ref,
+                "commit_sha": s.commit_sha,
+                "total_findings": s.total_findings,
+                "critical": s.critical_count,
+                "high": s.high_count,
+                "medium": s.medium_count,
+                "low": s.low_count,
+                "risk_score": s.overall_risk,
+                "started_at": s.started_at.isoformat() if s.started_at else None,
+                "completed_at": s.completed_at.isoformat() if s.completed_at else None,
+                "security_gate_status": s.security_gate_status,
+                "security_gate_reason": s.security_gate_reason,
+            }
+        )
+
+    return {
+        "items": items,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@app.get("/api/scans/{scan_id}")
+def get_scan_by_id(
+    scan_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Retrieve detailed metadata and findings for a specific scan.
+
+    Ownership is enforced inside the query: another workspace's scan (or an
+    unowned historical scan) is indistinguishable from a missing scan (404).
+    """
+    scan = (
+        db.query(Scan)
+        .filter(
+            Scan.id == scan_id,
+            Scan.user_id == current_user.id,
+        )
+        .first()
+    )
+
+    if not scan:
+        raise HTTPException(
+            status_code=404,
+            detail="Scan not found",
+        )
+
+    resolved_repo = scan.repository
+    if not resolved_repo and scan.target_path.startswith("github.com/"):
+        resolved_repo = scan.target_path[len("github.com/"):]
+
+    return {
+        "scan_id": scan.id,
+        "repository": resolved_repo,
+        "target_path": scan.target_path,
+        "status": scan.status,
+        "event_type": scan.event_type or "unknown",
+        "ref": scan.ref,
+        "commit_sha": scan.commit_sha,
+        "total_findings": scan.total_findings,
+        "critical": scan.critical_count,
+        "high": scan.high_count,
+        "medium": scan.medium_count,
+        "low": scan.low_count,
+        "overall_risk": scan.overall_risk,
+        "code_scanning": scan.code_scanning,
+        "dependency_scanning": scan.dependency_scanning,
+        "secret_detection": scan.secret_detection,
+        "container_scanning": scan.container_scanning,
+        "started_at": scan.started_at.isoformat() if scan.started_at else None,
+        "completed_at": scan.completed_at.isoformat() if scan.completed_at else None,
+        "security_gate_status": scan.security_gate_status,
+        "security_gate_reason": scan.security_gate_reason,
+        "findings": [
+            {
+                "id": f.id,
+                "scan_id": f.scan_id,
+                "vulnerability_id": f.vulnerability_id,
+                "title": f.title,
+                "description": f.description,
+                "tool": f.tool,
+                "severity": f.severity,
+                "priority": f.priority,
+                "risk_score": f.risk_score,
+                "exploitability": f.exploitability,
+                "target": f.target,
+                "package_name": f.package_name,
+                "installed_version": f.installed_version,
+                "fixed_version": f.fixed_version,
+                "fix_available": f.fix_available,
+                "production": f.production,
+                "affected_packages": f.affected_packages,
+                "ai_explanation": f.ai_explanation,
+                "potential_impact": f.potential_impact,
+                "recommended_action": f.recommended_action,
+                "risk_summary": f.risk_summary,
+                "finding_key": f.finding_key,
+                "scanner_type": f.scanner_type,
+                "lifecycle_status": f.lifecycle_status,
+                "first_seen_at": f.first_seen_at.isoformat() if f.first_seen_at else None,
+                "last_seen_at": f.last_seen_at.isoformat() if f.last_seen_at else None,
+                "fixed_at": f.fixed_at.isoformat() if f.fixed_at else None,
+                "reopened_at": f.reopened_at.isoformat() if f.reopened_at else None,
+                "occurrence_count": f.occurrence_count,
+            }
+            for f in scan.findings
+        ],
+    }
+
+
+@app.get("/api/scans/{scan_id}/security-gate")
+def get_security_gate(
+    scan_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    scan = (
+        db.query(Scan)
+        .filter(
+            Scan.id == scan_id,
+            Scan.user_id == current_user.id,
+        )
+        .first()
+    )
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+
+    status = scan.security_gate_status
+    reason = scan.security_gate_reason
+    if not status:
+        status = "ERROR" if scan.status != "completed" else "UNKNOWN"
+        reason = reason or "No persisted security gate result is available for this scan."
+
+    return {
+        "scan_id": scan.id,
+        "status": status,
+        "reason": reason,
+        "critical_count": scan.critical_count,
+        "high_count": scan.high_count,
+        "medium_count": scan.medium_count,
+        "low_count": scan.low_count,
+        "total_findings": scan.total_findings,
+    }
+
+
+# ============================================================
+# SUMMARY
+# ============================================================
+
+@app.get("/api/summary")
+def get_summary(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    latest_scan = (
+        db.query(Scan)
+        .filter(Scan.user_id == current_user.id)
+        .order_by(
+            Scan.started_at.desc()
+        )
+        .first()
+    )
+
+    if not latest_scan:
+        return {
+            "security_health_score": 100,
+            "total_findings": 0,
+            "critical": 0,
+            "high": 0,
+            "medium": 0,
+            "low": 0,
+            "overall_risk": 0,
+            "ai_remediations": 0,
+            "new_findings": 0,
+            "open_findings": 0,
+            "fixed_findings": 0,
+            "reopened_findings": 0,
+        }
+
+    ai_remediations = (
+        db.query(Finding)
+        .filter(
+            Finding.scan_id == latest_scan.id,
+            Finding.ai_explanation != "",
+        )
+        .count()
+    )
+
+    # Workspace-scoped lifecycle counts: derived from findings belonging to
+    # scans OWNED by the authenticated workspace. Counting DISTINCT
+    # finding_key deduplicates the same logical finding repeated across
+    # multiple scans. Global FindingLifecycle rows are never exposed.
+    lifecycle_rows = (
+        db.query(
+            Finding.lifecycle_status,
+            func.count(distinct(Finding.finding_key)),
+        )
+        .join(Scan, Finding.scan_id == Scan.id)
+        .filter(Scan.user_id == current_user.id)
+        .group_by(Finding.lifecycle_status)
+        .all()
+    )
+
+    lifecycle_counts = {status: 0 for status in ("new", "open", "fixed", "reopened")}
+    for lifecycle_status_value, key_count in lifecycle_rows:
+        if lifecycle_status_value in lifecycle_counts:
+            lifecycle_counts[lifecycle_status_value] = int(key_count or 0)
+
+    health_score = max(
+        0,
+        round(
+            100 - latest_scan.overall_risk
+        ),
+    )
+
+    return {
+        "security_health_score": health_score,
+        "total_findings": latest_scan.total_findings,
+        "critical": latest_scan.critical_count,
+        "high": latest_scan.high_count,
+        "medium": latest_scan.medium_count,
+        "low": latest_scan.low_count,
+        "overall_risk": latest_scan.overall_risk,
+        "ai_remediations": ai_remediations,
+        "scan_id": latest_scan.id,
+        "status": latest_scan.status,
+        "new_findings": lifecycle_counts["new"],
+        "open_findings": lifecycle_counts["open"],
+        "fixed_findings": lifecycle_counts["fixed"],
+        "reopened_findings": lifecycle_counts["reopened"],
+    }
+
+
+# ============================================================
+# FINDINGS
+# ============================================================
+
+@app.get("/api/findings")
+def get_findings(
+    lifecycle_status: str | None = Query(default=None),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Workspace-scoped findings: only findings belonging to scans owned by
+    the authenticated user. Unowned historical findings are hidden."""
+    query = (
+        db.query(Finding)
+        .join(Scan, Finding.scan_id == Scan.id)
+        .filter(Scan.user_id == current_user.id)
+    )
+    if lifecycle_status:
+        lifecycle_status = lifecycle_status.lower()
+        if lifecycle_status not in {"new", "open", "fixed", "reopened"}:
+            raise HTTPException(status_code=422, detail="Invalid lifecycle_status")
+        query = query.filter(Finding.lifecycle_status == lifecycle_status)
+
+    findings = (
+        query
+        .order_by(
+            Finding.id.desc()
+        )
+        .all()
+    )
+
+    return [
+        {
+            "id": finding.id,
+            "scan_id": finding.scan_id,
+            "vulnerability_id": finding.vulnerability_id,
+            "title": finding.title,
+            "description": finding.description,
+            "tool": finding.tool,
+            "severity": finding.severity,
+            "priority": finding.priority,
+            "risk_score": finding.risk_score,
+            "exploitability": finding.exploitability,
+            "target": finding.target,
+            "package_name": finding.package_name,
+            "installed_version": finding.installed_version,
+            "fixed_version": finding.fixed_version,
+            "fix_available": finding.fix_available,
+            "production": finding.production,
+            "affected_packages": finding.affected_packages,
+            "ai_explanation": finding.ai_explanation,
+            "potential_impact": finding.potential_impact,
+            "recommended_action": finding.recommended_action,
+            "risk_summary": finding.risk_summary,
+            "finding_key": finding.finding_key,
+            "scanner_type": finding.scanner_type,
+            "lifecycle_status": finding.lifecycle_status,
+            "first_seen_at": finding.first_seen_at.isoformat() if finding.first_seen_at else None,
+            "last_seen_at": finding.last_seen_at.isoformat() if finding.last_seen_at else None,
+            "fixed_at": finding.fixed_at.isoformat() if finding.fixed_at else None,
+            "reopened_at": finding.reopened_at.isoformat() if finding.reopened_at else None,
+            "occurrence_count": finding.occurrence_count,
+        }
+        for finding in findings
+    ]
+
+
+# ============================================================
+# SINGLE FINDING
+# ============================================================
+
+@app.get("/api/findings/{vulnerability_id}")
+def get_finding(
+    vulnerability_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Single finding lookup — ownership enforced inside the query via the
+    Finding → Scan join. Other workspaces' findings resolve to 404."""
+    finding = (
+        db.query(Finding)
+        .join(Scan, Finding.scan_id == Scan.id)
+        .filter(
+            Finding.vulnerability_id
+            == vulnerability_id,
+            Scan.user_id == current_user.id,
+        )
+        .order_by(
+            Finding.id.desc()
+        )
+        .first()
+    )
+
+    if not finding:
+        raise HTTPException(
+            status_code=404,
+            detail="Finding not found",
+        )
+
+    return {
+        "id": finding.id,
+        "scan_id": finding.scan_id,
+        "vulnerability_id": finding.vulnerability_id,
+        "title": finding.title,
+        "description": finding.description,
+        "tool": finding.tool,
+        "severity": finding.severity,
+        "priority": finding.priority,
+        "risk_score": finding.risk_score,
+        "exploitability": finding.exploitability,
+        "target": finding.target,
+        "scanner_type": finding.scanner_type,
+        "finding_key": finding.finding_key,
+        "package_name": finding.package_name,
+        "installed_version": finding.installed_version,
+        "fixed_version": finding.fixed_version,
+        "fix_available": finding.fix_available,
+        "production": finding.production,
+        "affected_packages": finding.affected_packages,
+        "file_path": getattr(finding, "file_path", ""),
+        "line_number": getattr(finding, "line_number", ""),
+        "evidence": getattr(finding, "evidence", ""),
+        "code_snippet": getattr(finding, "code_snippet", ""),
+        "ai_explanation": finding.ai_explanation,
+        "potential_impact": finding.potential_impact,
+        "recommended_action": finding.recommended_action,
+        "risk_summary": finding.risk_summary,
+        "finding_key": finding.finding_key,
+        "scanner_type": finding.scanner_type,
+        "lifecycle_status": finding.lifecycle_status,
+        "first_seen_at": finding.first_seen_at.isoformat() if finding.first_seen_at else None,
+        "last_seen_at": finding.last_seen_at.isoformat() if finding.last_seen_at else None,
+        "fixed_at": finding.fixed_at.isoformat() if finding.fixed_at else None,
+        "reopened_at": finding.reopened_at.isoformat() if finding.reopened_at else None,
+        "occurrence_count": finding.occurrence_count,
+    }
+
+
+# ============================================================
+# AI ANALYSIS
+# ============================================================
+
+@app.post("/api/findings/{vulnerability_id}/analyze")
 def analyze_single_finding(
     vulnerability_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
-
-    # First load findings WITHOUT Cloudflare AI.
-    findings = load_findings(
-        use_ai=False
+    """AI analysis for a single finding — ownership enforced inside the query
+    via the Finding → Scan join; AI enrichment can never mutate another
+    workspace's finding."""
+    finding = (
+        db.query(Finding)
+        .join(Scan, Finding.scan_id == Scan.id)
+        .filter(
+            Finding.vulnerability_id
+            == vulnerability_id,
+            Scan.user_id == current_user.id,
+        )
+        .order_by(
+            Finding.id.desc()
+        )
+        .first()
     )
 
-    vulnerability_id = (
-        vulnerability_id.upper()
+    if not finding:
+        raise HTTPException(
+            status_code=404,
+            detail="Finding not found",
+        )
+
+    finding_data = {
+        "vulnerability_id": finding.vulnerability_id,
+        "title": finding.title,
+        "description": finding.description,
+        "tool": finding.tool,
+        "severity": finding.severity,
+        "priority": finding.priority,
+        "risk_score": finding.risk_score,
+        "exploitability": finding.exploitability,
+        "target": finding.target,
+        "scanner_type": finding.scanner_type,
+        "finding_key": finding.finding_key,
+        "package_name": finding.package_name,
+        "installed_version": finding.installed_version,
+        "fixed_version": finding.fixed_version,
+        "fix_available": finding.fix_available,
+        "production": finding.production,
+        "affected_packages": finding.affected_packages,
+        "evidence": finding.description,
+        "file_path": finding.target,
+    }
+
+    try:
+        enriched = analyze_finding(
+            finding_data,
+            use_ai=True,
+        )
+    except TypeError:
+        enriched = analyze_finding(
+            finding_data
+        )
+
+    finding.ai_explanation = str(
+        enriched.get(
+            "ai_explanation",
+            "",
+        )
     )
 
-    for finding in findings:
+    finding.potential_impact = str(
+        enriched.get(
+            "potential_impact",
+            "",
+        )
+    )
 
-        current_id = str(
-            finding.get(
-                "vulnerability_id",
-                "",
+    finding.recommended_action = str(
+        enriched.get(
+            "recommended_action",
+            "",
+        )
+    )
+
+    finding.risk_summary = str(
+        enriched.get(
+            "risk_summary",
+            "",
+        )
+    )
+
+    db.commit()
+    db.refresh(finding)
+
+    return {
+        "vulnerability_id": finding.vulnerability_id,
+        "ai_explanation": finding.ai_explanation,
+        "potential_impact": finding.potential_impact,
+        "recommended_action": finding.recommended_action,
+        "risk_summary": finding.risk_summary,
+    }
+
+
+# ============================================================
+# GITHUB WEBHOOK
+# ============================================================
+
+# PR actions that should trigger an automatic scan
+_SCAN_PR_ACTIONS = frozenset({"opened", "synchronize", "reopened"})
+
+
+@app.post("/api/github/webhook")
+async def github_webhook(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Receive, verify, and enqueue automatic scanning for GitHub webhook events.
+
+    Phase 6 — Durable Webhook Deduplication:
+    - HMAC-SHA256 signature verified first on raw request bytes.
+    - JSON parsed only after HMAC verification.
+    - Delivery-ID persisted atomically to PostgreSQL with unique constraint.
+    - Duplicate delivery IDs cleanly rejected (no scan task enqueued).
+    - Valid branch push and PR opened/synchronize/reopened events queue scan.
+    - Delivery lifecycle: received -> queued -> running -> completed / failed / ignored.
+    """
+    global _processed_deliveries
+
+    # --- 1. Read raw bytes BEFORE any JSON parsing ---
+    raw_body = await request.body()
+
+    # --- 2. Extract GitHub headers ---
+    event_type = request.headers.get("X-GitHub-Event", "")
+    signature_header = request.headers.get("X-Hub-Signature-256")
+    delivery_id = request.headers.get("X-GitHub-Delivery")
+
+    # --- 3. Verify HMAC-SHA256 signature ---
+    try:
+        webhook_secret = get_webhook_secret()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    if not verify_github_signature(raw_body, signature_header, secret=webhook_secret):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or missing webhook signature. "
+                   "Ensure GITHUB_WEBHOOK_SECRET matches the secret configured in GitHub.",
+        )
+
+    # --- 4. Parse JSON (only AFTER signature verification) ---
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(
+            status_code=400,
+            detail="Webhook payload is not valid JSON.",
+        )
+
+    # --- 5. ping event ---
+    if event_type == "ping":
+        return {
+            "status": "ok",
+            "event": "ping",
+            "zen": payload.get("zen", ""),
+            "hook_id": payload.get("hook_id"),
+        }
+
+    # --- 6. Handle unsupported events ---
+    if event_type not in ("push", "pull_request"):
+        if delivery_id:
+            delivery = GitHubWebhookDelivery(
+                delivery_id=delivery_id,
+                event_type=event_type or "unknown",
+                action=payload.get("action") if isinstance(payload, dict) else None,
+                repository=payload.get("repository", {}).get("full_name") if isinstance(payload, dict) else None,
+                owner=payload.get("repository", {}).get("owner", {}).get("login") if isinstance(payload, dict) else None,
+                status="ignored",
+                received_at=datetime.utcnow(),
             )
-        ).upper()
+            try:
+                db.add(delivery)
+                db.commit()
+                _processed_deliveries.add(delivery_id)
+            except IntegrityError:
+                db.rollback()
+                _processed_deliveries.add(delivery_id)
+                return JSONResponse(
+                    status_code=200,
+                    content={
+                        "status": "duplicate",
+                        "event": event_type,
+                        "delivery_id": delivery_id,
+                        "detail": "Delivery already processed.",
+                    },
+                )
+            except Exception as db_exc:
+                db.rollback()
+                logger.error("[Webhook] Database error recording unsupported delivery %s: %s", delivery_id, str(db_exc))
+                raise HTTPException(status_code=503, detail="Database temporarily unavailable.")
 
-        if current_id == vulnerability_id:
+        return {
+            "status": "ignored",
+            "event": event_type or "unknown",
+            "detail": "Event type is not handled in this phase.",
+        }
 
-            # Send ONLY this finding to Cloudflare AI.
-            analyzed = analyze_finding(
-                finding,
-                use_ai=True,
+    # --- 7. Extract metadata ---
+    if event_type == "push":
+        metadata = extract_push_event_metadata(payload, delivery_id)
+        log_webhook_event("push", metadata)
+        action = None
+        ref = metadata.get("ref", "")
+        commit_sha = metadata.get("after")
+    else:  # pull_request
+        metadata = extract_pull_request_event_metadata(payload, delivery_id)
+        log_webhook_event("pull_request", metadata)
+        action = metadata.get("action", "")
+        ref = metadata.get("head_branch", "")
+        commit_sha = metadata.get("head_sha")
+
+    owner = metadata.get("owner")
+    repo = metadata.get("repository_name")
+    installation_id = metadata.get("installation_id")
+    repo_full_name = metadata.get("repository_full_name")
+
+    if not owner or not repo:
+        raise HTTPException(status_code=400, detail="Webhook repository metadata is invalid")
+    _validate_github_name(owner, "owner")
+    _validate_github_name(repo, "repository")
+    _validate_untrusted_ref(ref)
+    if commit_sha and (len(commit_sha) > 100 or any(char in commit_sha for char in "\r\n\x00")):
+        raise HTTPException(status_code=400, detail="Webhook commit metadata is invalid")
+
+    # --- 8. Atomic delivery persistence & deduplication ---
+    delivery = None
+    if delivery_id:
+        delivery = GitHubWebhookDelivery(
+            delivery_id=delivery_id,
+            event_type=event_type,
+            action=action,
+            repository=repo_full_name,
+            owner=owner,
+            ref=ref,
+            commit_sha=commit_sha,
+            status="received",
+            received_at=datetime.utcnow(),
+            installation_id=installation_id,
+        )
+        try:
+            db.add(delivery)
+            db.commit()
+            db.refresh(delivery)
+            _processed_deliveries.add(delivery_id)
+        except IntegrityError:
+            db.rollback()
+            _processed_deliveries.add(delivery_id)
+            logger.info("[Webhook] Duplicate delivery_id ignored: %s", delivery_id)
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "status": "duplicate",
+                    "event": event_type,
+                    "delivery_id": delivery_id,
+                    "detail": "Delivery already processed.",
+                },
+            )
+        except Exception as db_exc:
+            db.rollback()
+            logger.error("[Webhook] Database error during delivery deduplication: %s", str(db_exc))
+            raise HTTPException(
+                status_code=503,
+                detail="Database temporarily unavailable.",
             )
 
-            return analyzed
+    # --- 9. Resolve owning workspace (safe webhook-to-workspace association) ---
+    # Only enqueue a scan when ownership can be safely established via the
+    # GitHub App installation mapping (or an unambiguous repository mapping).
+    # The GitHub repository owner's login is NEVER used as a Rakshak identity,
+    # and ownerless scans are never created from webhook events.
+    owner_user_id = _resolve_webhook_workspace(db, installation_id, repo_full_name)
 
-    raise HTTPException(
-        status_code=404,
-        detail="Vulnerability not found",
-    )
+    if owner_user_id is None:
+        logger.info(
+            "[Webhook] No Rakshak workspace associated with repository=%s installation=%s — delivery ignored: %s",
+            repo_full_name,
+            installation_id,
+            delivery_id,
+        )
+        if delivery:
+            delivery.status = "ignored"
+            delivery.error_message = (
+                "No Rakshak workspace is associated with this repository/installation; "
+                "scan not enqueued."
+            )
+            db.commit()
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "ignored",
+                "event": event_type,
+                "delivery_id": delivery_id,
+                "repository": repo_full_name,
+                "detail": (
+                    "Repository is not associated with a Rakshak workspace; "
+                    "scan skipped."
+                ),
+                "scan_queued": False,
+                "task_id": None,
+            },
+        )
+
+    # --- 10. Evaluate actionable scan ---
+    scan_queued = False
+    task_id = None
+
+    if event_type == "push":
+        if owner and repo and ref and ref.startswith("refs/heads/"):
+            scan_ref = commit_sha or ref
+            if delivery:
+                delivery.status = "queued"
+                db.commit()
+            try:
+                task = run_github_repository_scan_task.delay(
+                    owner=owner,
+                    repo=repo,
+                    ref=scan_ref,
+                    access_token=None,
+                    code_scanning=True,
+                    dependency_scanning=True,
+                    secret_detection=True,
+                    container_scanning=False,
+                    container_image=None,
+                    trigger="push",
+                    delivery_id=delivery_id,
+                    installation_id=installation_id,
+                    owner_user_id=owner_user_id,
+                )
+                task_id = getattr(task, "id", None)
+                scan_queued = True
+            except Exception as queue_exc:
+                logger.error("[Webhook] Failed to enqueue push scan task: %s", str(queue_exc))
+                if delivery:
+                    delivery.status = "failed"
+                    delivery.error_message = f"Queue error: {str(queue_exc)}"
+                    db.commit()
+                raise HTTPException(
+                    status_code=503,
+                    detail="Scan task queue is temporarily unavailable.",
+                )
+        else:
+            if delivery:
+                delivery.status = "ignored"
+                db.commit()
+
+        response_content = {
+            "status": "accepted",
+            "event": "push",
+            "delivery_id": delivery_id,
+            "repository": repo_full_name,
+            "ref": ref,
+            "commits": metadata.get("commits_count"),
+            "scan_queued": scan_queued,
+            "task_id": task_id,
+        }
+        status_code = 202 if scan_queued else 200
+        return JSONResponse(status_code=status_code, content=response_content)
+
+    elif event_type == "pull_request":
+        pr_number = metadata.get("pr_number")
+        if action in _SCAN_PR_ACTIONS and owner and repo:
+            head_sha = metadata.get("head_sha")
+            scan_ref = head_sha or metadata.get("head_branch")
+            check_token = get_check_run_token(None)
+
+            if delivery:
+                delivery.status = "queued"
+                db.commit()
+
+            try:
+                task = run_github_repository_scan_task.delay(
+                    owner=owner,
+                    repo=repo,
+                    ref=scan_ref,
+                    access_token=None,
+                    code_scanning=True,
+                    dependency_scanning=True,
+                    secret_detection=True,
+                    container_scanning=False,
+                    container_image=None,
+                    trigger="pull_request",
+                    delivery_id=delivery_id,
+                    pr_head_sha=head_sha,
+                    check_run_access_token=check_token,
+                    installation_id=installation_id,
+                    owner_user_id=owner_user_id,
+                )
+                task_id = getattr(task, "id", None)
+                scan_queued = True
+            except Exception as queue_exc:
+                logger.error("[Webhook] Failed to enqueue PR scan task: %s", str(queue_exc))
+                if delivery:
+                    delivery.status = "failed"
+                    delivery.error_message = f"Queue error: {str(queue_exc)}"
+                    db.commit()
+                raise HTTPException(
+                    status_code=503,
+                    detail="Scan task queue is temporarily unavailable.",
+                )
+        else:
+            if delivery:
+                delivery.status = "ignored"
+                db.commit()
+
+        response_content = {
+            "status": "accepted",
+            "event": "pull_request",
+            "delivery_id": delivery_id,
+            "repository": repo_full_name,
+            "pr_number": pr_number,
+            "action": action,
+            "scan_queued": scan_queued,
+            "task_id": task_id,
+        }
+        status_code = 202 if scan_queued else 200
+        return JSONResponse(status_code=status_code, content=response_content)
 
 
-# =========================================================
-# CLI REPORT GENERATION
-# =========================================================
-
-def main():
-
-    print(
-        "[INFO] Loading security findings..."
-    )
-
-    print(
-        "[INFO] Cloudflare AI analysis enabled for CLI report."
-    )
-
-    findings = load_findings(
-        use_ai=True
-    )
-
-    print(
-        f"[INFO] Total security findings: "
-        f"{len(findings)}"
-    )
-
-    report = generate_report(
-        findings
-    )
-
-    print_report(
-        report
-    )
-
-    save_report(
-        report
-    )
+# ============================================================
+# GITHUB APP ENDPOINTS
+# ============================================================
 
 
-# =========================================================
-# RUN DIRECTLY
-# =========================================================
+@app.get("/api/github/app/status")
+def github_app_status():
+    """Return safe configuration status of the GitHub App integration.
 
-if __name__ == "__main__":
-    main()
+    Never exposes private keys, JWTs, or installation access tokens.
+    """
+    return get_github_app_status()
+
+
+# ============================================================
+# TASK QUEUE SYSTEM ENDPOINTS
+# ============================================================
+
+
+@app.get("/api/system/queue-status")
+def system_queue_status():
+    """Return safe operational status of the Celery/Redis task queue.
+
+    Never exposes Redis passwords, internal hostnames, or connection strings.
+    """
+    return get_queue_status()

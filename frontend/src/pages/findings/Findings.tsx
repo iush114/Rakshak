@@ -1,12 +1,12 @@
 import { useState, useMemo } from 'react';
-import { 
-  Search, 
-  Download, 
-  SlidersHorizontal, 
-  ArrowUpDown, 
-  Eye, 
-  X, 
-  ShieldAlert, 
+import {
+  Search,
+  Download,
+  SlidersHorizontal,
+  ArrowUpDown,
+  Eye,
+  X,
+  ShieldAlert,
   Sparkles,
   FileCode,
   Loader2,
@@ -29,6 +29,7 @@ export default function Findings() {
   const [severityFilter, setSeverityFilter] = useState<string>('all');
   const [priorityFilter, setPriorityFilter] = useState<string>('all');
   const [toolFilter, setToolFilter] = useState<string>('all');
+  const [lifecycleFilter, setLifecycleFilter] = useState<string>('all');
   const [sortByRisk, setSortByRisk] = useState<boolean>(true);
 
   // Modal / Drawer Selection
@@ -47,7 +48,7 @@ export default function Findings() {
     return findings
       .filter((item) => {
         const query = searchTerm.toLowerCase();
-        const matchesSearch = 
+        const matchesSearch =
           item.cve.toLowerCase().includes(query) ||
           item.title.toLowerCase().includes(query) ||
           item.package.toLowerCase().includes(query) ||
@@ -56,22 +57,30 @@ export default function Findings() {
         const matchesSeverity = severityFilter === 'all' || item.severity === severityFilter;
         const matchesPriority = priorityFilter === 'all' || (item.priority && item.priority.toLowerCase() === priorityFilter.toLowerCase());
         const matchesTool = toolFilter === 'all' || item.tool === toolFilter;
+        const matchesLifecycle = lifecycleFilter === 'all' || item.lifecycleStatus === lifecycleFilter;
 
-        return matchesSearch && matchesSeverity && matchesPriority && matchesTool;
+        return matchesSearch && matchesSeverity && matchesPriority && matchesTool && matchesLifecycle;
       })
       .sort((a, b) => (sortByRisk ? b.riskScore - a.riskScore : a.riskScore - b.riskScore));
-  }, [findings, searchTerm, severityFilter, priorityFilter, toolFilter, sortByRisk]);
+  }, [findings, searchTerm, severityFilter, priorityFilter, toolFilter, lifecycleFilter, sortByRisk]);
 
   const clearFilters = () => {
     setSearchTerm('');
     setSeverityFilter('all');
     setPriorityFilter('all');
     setToolFilter('all');
+    setLifecycleFilter('all');
+  };
+
+  const openFinding = (finding: Finding) => {
+    setSelectedFinding(finding);
+    setAiResult(null);
+    setAiError(null);
   };
 
   const exportCSV = () => {
     const headers = ['CVE ID,Title,Severity,Priority,Risk Score,Tool,Package,Fixed Version,Status\n'];
-    const rows = filteredFindings.map(f => 
+    const rows = filteredFindings.map(f =>
       `"${f.cve}","${f.title.replace(/"/g, '""')}","${f.severity}","${f.priority}",${f.riskScore},"${f.tool}","${f.package}","${f.fixedVersion}","${f.status}"\n`
     );
     const blob = new Blob([...headers, ...rows], { type: 'text/csv' });
@@ -85,14 +94,18 @@ export default function Findings() {
   // AI Analysis Trigger - Real Backend FastAPI endpoint
   const handleAnalyzeWithAI = async () => {
     if (!selectedFinding) return;
+    if (!selectedFinding.vulnerabilityId) {
+      setAiError('AI analysis is unavailable because this finding has no vulnerability ID.');
+      return;
+    }
     setIsAiAnalyzing(true);
     setAiError(null);
     setAiResult(null);
 
     try {
-      // Call FastAPI endpoint: GET /api/findings/{vulnerability_id}/analyze
-      const result = await analyzeFindingWithAI(selectedFinding.cve);
-      
+      // Call the explicit FastAPI analysis endpoint for this finding.
+      const result = await analyzeFindingWithAI(selectedFinding.vulnerabilityId);
+
       setAiResult({
         explanation: result.explanation,
         potentialImpact: result.potentialImpact,
@@ -113,17 +126,7 @@ export default function Findings() {
       });
     } catch (err: any) {
       console.error('[Rakshak] AI Analysis error:', err);
-      // If backend fails, use existing finding attributes if available or show informative error
-      if (selectedFinding.aiExplanation) {
-        setAiResult({
-          explanation: selectedFinding.aiExplanation,
-          potentialImpact: selectedFinding.potentialImpact || 'Potential security degradation.',
-          recommendedAction: selectedFinding.recommendedAction || 'Apply vendor updates.',
-          riskSummary: selectedFinding.riskSummary || 'Action required.'
-        });
-      } else {
-        setAiError(err.message || 'Failed to complete AI analysis from FastAPI backend.');
-      }
+      setAiError(err.message || 'Failed to complete AI analysis from FastAPI backend.');
     } finally {
       setIsAiAnalyzing(false);
     }
@@ -131,7 +134,7 @@ export default function Findings() {
 
   return (
     <div className="space-y-6 pb-12">
-      
+
       {/* HEADER */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-border/50 pb-5">
         <div>
@@ -159,8 +162,8 @@ export default function Findings() {
           </p>
         </div>
 
-        <Button 
-          variant="outline" 
+        <Button
+          variant="outline"
           onClick={exportCSV}
           className="flex items-center gap-2 text-xs shrink-0"
         >
@@ -172,13 +175,13 @@ export default function Findings() {
       {/* SEARCH AND FILTERS BAR */}
       <Card className="p-4 bg-card/80 border-border space-y-3">
         <div className="flex flex-col md:flex-row items-center justify-between gap-4">
-          
+
           {/* Search Input */}
           <div className="relative w-full md:w-80">
             <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-textSecondary" size={16} />
-            <Input 
-              type="text" 
-              placeholder="Search by CVE ID, Title, Package, Description..." 
+            <Input
+              type="text"
+              placeholder="Search by CVE ID, Title, Package, Description..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="pl-10 text-xs bg-background h-10 border-border rounded-xl"
@@ -232,6 +235,19 @@ export default function Findings() {
               <option value="Bandit SAST">Bandit SAST</option>
             </select>
 
+            {/* Lifecycle Filter */}
+            <select
+              value={lifecycleFilter}
+              onChange={(e) => setLifecycleFilter(e.target.value)}
+              className="bg-background border border-border text-white text-xs rounded-xl px-3 py-2 focus:border-neonPurple focus:outline-none"
+            >
+              <option value="all">Lifecycle: All</option>
+              <option value="new">New</option>
+              <option value="open">Open</option>
+              <option value="fixed">Fixed</option>
+              <option value="reopened">Reopened</option>
+            </select>
+
             {/* Clear Filters */}
             <Button
               variant="ghost"
@@ -243,8 +259,8 @@ export default function Findings() {
             </Button>
 
             {/* Sort Risk */}
-            <Button 
-              variant="outline" 
+            <Button
+              variant="outline"
               size="sm"
               onClick={() => setSortByRisk(!sortByRisk)}
               className="text-xs text-textSecondary hover:text-white flex items-center gap-1.5 border border-border h-9"
@@ -271,6 +287,7 @@ export default function Findings() {
                   <th className="px-4 py-3.5">Priority</th>
                   <th className="px-4 py-3.5">Risk Score</th>
                   <th className="px-4 py-3.5">Status</th>
+                  <th className="px-4 py-3.5">Lifecycle</th>
                   <th className="px-4 py-3.5">Tool</th>
                   <th className="px-4 py-3.5">Package</th>
                   <th className="px-4 py-3.5">Fix Available</th>
@@ -278,102 +295,117 @@ export default function Findings() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/40 font-sans">
-                {filteredFindings.map((finding) => (
-                  <tr 
-                    key={finding.id}
-                    onClick={() => { setSelectedFinding(finding); setAiResult(null); }}
-                    className="hover:bg-white/5 transition-colors cursor-pointer group"
-                  >
-                    {/* CVE ID */}
-                    <td className="px-4 py-3.5 font-mono font-bold text-neonPurple whitespace-nowrap">
-                      {finding.cve}
-                    </td>
-
-                    {/* Title */}
-                    <td className="px-4 py-3.5 font-medium text-white max-w-xs truncate" title={finding.title}>
-                      {finding.title}
-                    </td>
-
-                    {/* Severity */}
-                    <td className="px-4 py-3.5">
-                      <Badge variant={finding.severity}>
-                        {finding.severity.toUpperCase()}
-                      </Badge>
-                    </td>
-
-                    {/* Priority */}
-                    <td className="px-4 py-3.5">
-                      <span className={`font-semibold ${
-                        finding.priority === 'Critical' ? 'text-danger' : finding.priority === 'High' ? 'text-pinkAccent' : 'text-warning'
-                      }`}>
-                        {finding.priority}
-                      </span>
-                    </td>
-
-                    {/* Risk Score */}
-                    <td className="px-4 py-3.5">
-                      <div className="flex items-center gap-2">
-                        <span className="font-extrabold text-white">{finding.riskScore}/100</span>
-                        <div className="w-12 h-1.5 bg-border rounded-full overflow-hidden hidden sm:block">
-                          <div 
-                            className={`h-full rounded-full ${finding.riskScore > 80 ? 'bg-danger' : finding.riskScore > 50 ? 'bg-warning' : 'bg-neonPurple'}`} 
-                            style={{ width: `${finding.riskScore}%` }}
-                          />
-                        </div>
-                      </div>
-                    </td>
-
-                    {/* Status */}
-                    <td className="px-4 py-3.5">
-                      <Badge variant="outline" className={`text-[10px] whitespace-nowrap ${
-                        finding.status === 'Active' ? 'border-danger/30 bg-danger/15 text-danger' :
-                        finding.status === 'Resolved' ? 'border-success/30 bg-success/15 text-success' :
-                        finding.status === 'Fix Available' ? 'border-warning/30 bg-warning/15 text-warning' :
-                        'border-border text-textSecondary'
-                      }`}>
-                        {finding.status === 'Active' && '● Active'}
-                        {finding.status === 'Resolved' && '✓ Resolved'}
-                        {finding.status === 'Fix Available' && '⚠ Fix Available'}
-                        {finding.status === 'Ignored' && '⊘ Ignored'}
-                      </Badge>
-                    </td>
-
-                    {/* Tool */}
-                    <td className="px-4 py-3.5">
-                      <Badge variant="outline" className="text-[10px] border-border text-textSecondary whitespace-nowrap">
-                        {finding.tool}
-                      </Badge>
-                    </td>
-
-                    {/* Package */}
-                    <td className="px-4 py-3.5 font-mono text-pinkAccent whitespace-nowrap">
-                      {finding.package}
-                    </td>
-
-                    {/* Fix Available */}
-                    <td className="px-4 py-3.5 whitespace-nowrap">
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-semibold border ${
-                        finding.fixedVersion && finding.fixedVersion !== 'No fix available'
-                          ? 'bg-success/15 text-success border-success/30'
-                          : 'bg-danger/15 text-danger border-danger/30'
-                      }`}>
-                        {finding.fixedVersion && finding.fixedVersion !== 'No fix available' ? 'Yes' : 'No'}
-                      </span>
-                    </td>
-
-                    {/* Actions */}
-                    <td className="px-4 py-3.5 text-right whitespace-nowrap">
-                      <button
-                        onClick={(e) => { e.stopPropagation(); setSelectedFinding(finding); setAiResult(null); }}
-                        className="p-1.5 rounded-lg bg-card border border-border text-textSecondary hover:text-white hover:border-neonPurple transition-all font-semibold text-xs flex items-center gap-1 ml-auto"
-                        title="View Finding Details"
-                      >
-                        <Eye size={16} />
-                        <span>View</span>
-                      </button>
+                {filteredFindings.length === 0 ? (
+                  <tr>
+                    <td colSpan={11} className="px-4 py-8 text-center text-textSecondary font-sans">
+                      {isLoading ? 'Loading findings...' : 'No security findings found.'}
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  filteredFindings.map((finding) => (
+                    <tr
+                      key={finding.id}
+                      onClick={() => openFinding(finding)}
+                      className="hover:bg-white/5 transition-colors cursor-pointer group"
+                    >
+                      {/* CVE ID */}
+                      <td className="px-4 py-3.5 font-mono font-bold text-neonPurple whitespace-nowrap">
+                        {finding.cve}
+                      </td>
+
+                      {/* Title */}
+                      <td className="px-4 py-3.5 font-medium text-white max-w-xs truncate" title={finding.title}>
+                        {finding.title}
+                      </td>
+
+                      {/* Severity */}
+                      <td className="px-4 py-3.5">
+                        <Badge variant={finding.severity}>
+                          {finding.severity.toUpperCase()}
+                        </Badge>
+                      </td>
+
+                      {/* Priority */}
+                      <td className="px-4 py-3.5">
+                        <span className={`font-semibold ${
+                          finding.priority === 'Critical' ? 'text-danger' : finding.priority === 'High' ? 'text-pinkAccent' : 'text-warning'
+                        }`}>
+                          {finding.priority}
+                        </span>
+                      </td>
+
+                      {/* Risk Score */}
+                      <td className="px-4 py-3.5">
+                        <div className="flex items-center gap-2">
+                          <span className="font-extrabold text-white">{finding.riskScore}/100</span>
+                          <div className="w-12 h-1.5 bg-border rounded-full overflow-hidden hidden sm:block">
+                            <div
+                              className={`h-full rounded-full ${finding.riskScore > 80 ? 'bg-danger' : finding.riskScore > 50 ? 'bg-warning' : 'bg-neonPurple'}`}
+                              style={{ width: `${finding.riskScore}%` }}
+                            />
+                          </div>
+                        </div>
+                      </td>
+
+                      {/* Status */}
+                      <td className="px-4 py-3.5">
+                        <Badge variant="outline" className={`text-[10px] whitespace-nowrap ${
+                          finding.status === 'Active' ? 'border-danger/30 bg-danger/15 text-danger' :
+                          finding.status === 'Resolved' ? 'border-success/30 bg-success/15 text-success' :
+                          finding.status === 'Fix Available' ? 'border-warning/30 bg-warning/15 text-warning' :
+                          'border-border text-textSecondary'
+                        }`}>
+                          {finding.status === 'Active' && '● Active'}
+                          {finding.status === 'Resolved' && '✓ Resolved'}
+                          {finding.status === 'Fix Available' && '⚠ Fix Available'}
+                          {finding.status === 'Ignored' && '⊘ Ignored'}
+                        </Badge>
+                      </td>
+
+                      {/* Lifecycle */}
+                      <td className="px-4 py-3.5">
+                        <Badge variant={finding.lifecycleStatus === 'fixed' ? 'success' : finding.lifecycleStatus === 'reopened' ? 'high' : finding.lifecycleStatus === 'new' ? 'info' : 'outline'}>
+                          {(finding.lifecycleStatus || 'open').toUpperCase()}
+                        </Badge>
+                      </td>
+
+                      {/* Tool */}
+                      <td className="px-4 py-3.5">
+                        <Badge variant="outline" className="text-[10px] border-border text-textSecondary whitespace-nowrap">
+                          {finding.tool}
+                        </Badge>
+                      </td>
+
+                      {/* Package */}
+                      <td className="px-4 py-3.5 font-mono text-pinkAccent whitespace-nowrap">
+                        {finding.package}
+                      </td>
+
+                      {/* Fix Available */}
+                      <td className="px-4 py-3.5 whitespace-nowrap">
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-semibold border ${
+                          finding.fixedVersion && finding.fixedVersion !== 'No fix available'
+                            ? 'bg-success/15 text-success border-success/30'
+                            : 'bg-danger/15 text-danger border-danger/30'
+                        }`}>
+                          {finding.fixedVersion && finding.fixedVersion !== 'No fix available' ? 'Yes' : 'No'}
+                        </span>
+                      </td>
+
+                      {/* Actions */}
+                      <td className="px-4 py-3.5 text-right whitespace-nowrap">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); openFinding(finding); }}
+                          className="p-1.5 rounded-lg bg-card border border-border text-textSecondary hover:text-white hover:border-neonPurple transition-all font-semibold text-xs flex items-center gap-1 ml-auto"
+                          title="View Finding Details"
+                        >
+                          <Eye size={16} />
+                          <span>View</span>
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
@@ -384,7 +416,7 @@ export default function Findings() {
       <AnimatePresence>
         {selectedFinding && (
           <div className="fixed inset-0 z-50 flex justify-end bg-black/55 backdrop-blur-md">
-            <motion.div 
+            <motion.div
               initial={{ x: '100%' }}
               animate={{ x: 0 }}
               exit={{ x: '100%' }}
@@ -392,7 +424,7 @@ export default function Findings() {
               className="w-full max-w-2xl bg-[#12051F] border-l border-[#2A1240] h-full overflow-y-auto p-6 flex flex-col justify-between shadow-2xl"
             >
               <div className="space-y-6">
-                
+
                 {/* Modal Header */}
                 <div className="flex items-center justify-between border-b border-[#2A1240] pb-4">
                   <div className="flex items-center gap-3">
@@ -462,7 +494,9 @@ export default function Findings() {
                 {/* Description */}
                 <div className="p-4 rounded-2xl bg-[#090014]/60 border border-[#2A1240] space-y-1.5">
                   <span className="text-xs font-bold text-white uppercase tracking-wider block">Description</span>
-                  <p className="text-xs text-textSecondary leading-relaxed">{selectedFinding.description}</p>
+                  <p className="text-xs text-textSecondary leading-relaxed line-clamp-4 max-h-20 overflow-hidden" title={selectedFinding.description}>
+                    {selectedFinding.description}
+                  </p>
                 </div>
 
                 {/* Affected Files */}
@@ -493,7 +527,7 @@ export default function Findings() {
                     <Button
                       variant="gradient"
                       size="sm"
-                      disabled={isAiAnalyzing}
+                      disabled={isAiAnalyzing || !selectedFinding.vulnerabilityId}
                       onClick={handleAnalyzeWithAI}
                       className="text-xs h-9 flex items-center gap-2 cursor-pointer shadow-md"
                     >
@@ -510,6 +544,12 @@ export default function Findings() {
                       )}
                     </Button>
                   </div>
+
+                  {!selectedFinding.vulnerabilityId && (
+                    <p className="text-[11px] text-warning">
+                      AI analysis is unavailable because this finding has no vulnerability ID.
+                    </p>
+                  )}
 
                   {/* AI Loading State Animation */}
                   {isAiAnalyzing && (
@@ -545,7 +585,7 @@ export default function Findings() {
 
                   {/* AI Response Output */}
                   {aiResult && !isAiAnalyzing && (
-                    <motion.div 
+                    <motion.div
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
                       className="p-4 rounded-xl bg-[#090014] border border-[#2A1240] space-y-3 text-xs leading-relaxed"
@@ -577,8 +617,8 @@ export default function Findings() {
 
               {/* Modal Footer Buttons */}
               <div className="pt-6 border-t border-[#2A1240] flex items-center gap-3">
-                <Button 
-                  variant="gradient" 
+                <Button
+                  variant="gradient"
                   className="flex-1 text-xs"
                   onClick={() => {
                     resolveFinding(selectedFinding.id);
@@ -587,8 +627,8 @@ export default function Findings() {
                 >
                   Mark as Resolved
                 </Button>
-                <Button 
-                  variant="outline" 
+                <Button
+                  variant="outline"
                   className="flex-1 text-xs"
                   onClick={() => setSelectedFinding(null)}
                 >

@@ -89,16 +89,22 @@ def parse_trivy_report(report_path: str) -> list[SecurityFinding]:
                     "UNKNOWN"
                 )
             ).upper()
-            vulnerability_id = str(
-                vulnerability.get(
-                    "VulnerabilityID",
-                    "Unknown vulnerability"
-                )
+            # Stable identifier supplied by Trivy itself (CVE-XXXX-YYYY or
+            # GHSA-xxxx-yyyy-zzzz). Stored as a first-class field so it survives
+            # the SecurityFinding -> Finding persistence boundary. When Trivy
+            # supplies no identifier it is left empty (never invented) and the
+            # title keeps the historical placeholder wording.
+            raw_vulnerability_id = vulnerability.get("VulnerabilityID")
+            vulnerability_id = (
+                str(raw_vulnerability_id).strip()
+                if raw_vulnerability_id
+                else ""
             )
+            display_id = vulnerability_id or "Unknown vulnerability"
             title = str(
                 vulnerability.get(
                     "Title",
-                    vulnerability_id
+                    display_id
                 )
             )
             description = str(
@@ -191,7 +197,8 @@ def parse_trivy_report(report_path: str) -> list[SecurityFinding]:
             finding = SecurityFinding(
                 tool="Trivy",
                 severity=severity,
-                title=f"{vulnerability_id}: {title}",
+                title=f"{display_id}: {title}",
+                vulnerability_id=vulnerability_id,
                 description=finding_description,
                 exploitability=exploitability,
                 production=True,

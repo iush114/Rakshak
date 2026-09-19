@@ -3,17 +3,45 @@ import { Outlet } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import Topbar from './Topbar';
 import { AnimatePresence, motion } from 'framer-motion';
+import { Shield } from 'lucide-react';
 
 export default function Layout() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+
+  const toggleSidebar = () => setIsSidebarCollapsed((isCollapsed) => !isCollapsed);
 
   return (
     <div className="flex h-screen bg-background text-foreground overflow-hidden font-sans select-none">
       
       {/* Desktop Sidebar */}
-      <div className="hidden md:block h-full">
-        <Sidebar />
-      </div>
+      <motion.div
+        animate={{ width: isSidebarCollapsed ? 0 : 240 }}
+        transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+        className="hidden md:block h-full overflow-hidden shrink-0"
+      >
+        <motion.div
+          animate={{ x: isSidebarCollapsed ? '-100%' : 0 }}
+          transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+          className="w-60 h-full"
+        >
+          <Sidebar isCollapsed={isSidebarCollapsed} onToggleSidebar={toggleSidebar} />
+        </motion.div>
+      </motion.div>
+
+      {isSidebarCollapsed && (
+        <button
+          type="button"
+          onClick={toggleSidebar}
+          aria-label="Expand sidebar"
+          className="fixed left-3 top-4 z-40 hidden md:flex h-10 w-10 items-center justify-center rounded-lg border border-border bg-card text-neonPurple shadow-lg transition-transform duration-200 hover:scale-110"
+        >
+          <span className="relative flex items-center justify-center">
+            <Shield className="h-8 w-8" />
+            <span className="absolute text-[10px] font-black text-white leading-none">R</span>
+          </span>
+        </button>
+      )}
 
       {/* Mobile Slide-over Sidebar Drawer */}
       <AnimatePresence>
@@ -34,7 +62,10 @@ export default function Layout() {
       </AnimatePresence>
 
       <div className="min-w-0 flex-1 flex flex-col relative overflow-hidden">
-        <Topbar onToggleMobileMenu={() => setMobileMenuOpen(!mobileMenuOpen)} />
+        <Topbar
+          onToggleMobileMenu={() => setMobileMenuOpen(!mobileMenuOpen)}
+          isSidebarCollapsed={isSidebarCollapsed}
+        />
         
         {/* Main Content Area */}
         <main className="min-h-0 min-w-0 flex-1 overflow-y-auto p-4 sm:p-6 md:p-8 relative">

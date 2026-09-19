@@ -38,7 +38,8 @@ export interface CodeScanResponse {
 }
 
 // FastAPI Backend URL configuration
-const FASTAPI_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api';
+const RAW_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000';
+const FASTAPI_BASE_URL = `${RAW_URL.replace(/\/api\/?$/, '').replace(/\/+$/, '')}/api`;
 
 export async function performSecurityScan(req: CodeScanRequest): Promise<CodeScanResponse> {
   const scanId = `SCAN-${Math.floor(100000 + Math.random() * 900000)}`;

@@ -1,9 +1,18 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { allMockFindings, type Finding } from '@/data/findings';
+import { type Finding } from '@/data/findings';
 import { mockReports, type SecurityReport } from '@/data/reports';
 import { mockAIAnalysisHistory, type AIAnalysisRecord } from '@/data/aiAnalysisHistory';
 import { mockRepositories, type Repository } from '@/data/repositories';
-import { getSummary, getFindings, type ApiSummaryResponse } from '@/services/api';
+import {
+  getSummary,
+  getFindings,
+  getAuthMe,
+  logoutAuth,
+  getGitHubRepos,
+  type ApiSummaryResponse,
+  type GitHubUser,
+  type GitHubRepo
+} from '@/services/api';
 
 export type FindingItem = Finding;
 
@@ -43,6 +52,17 @@ interface SecurityContextType {
   isLoading: boolean;
   backendOnline: boolean;
   backendError: string | null;
+  currentUser: GitHubUser | null;
+  isAuthChecking: boolean;
+  checkAuthStatus: () => Promise<void>;
+  logout: () => Promise<void>;
+  gitHubRepos: GitHubRepo[];
+  isLoadingRepos: boolean;
+  reposError: string | null;
+  fetchGitHubRepos: () => Promise<void>;
+  selectedGitHubRepo: GitHubRepo | null;
+  setSelectedGitHubRepo: (repo: GitHubRepo | null) => void;
+  selectGitHubRepoByName: (owner: string, name: string) => void;
   secrets: SecretItem[];
   scanHistory: ScanItem[];
   reports: SecurityReport[];
@@ -63,52 +83,6 @@ interface SecurityContextType {
   updateScanFindings: (newFindings: Finding[], scanSummary?: Partial<ApiSummaryResponse>) => void;
 }
 
-const initialSecrets: SecretItem[] = [
-  {
-    id: 'sec-1',
-    type: 'AWS_ACCESS_KEY_ID',
-    maskedSecret: 'EXAMPLE_AWS_KEY_*******',
-    rawSecret: 'EXAMPLE_AWS_KEY_REDACTED',
-    filePath: 'config/.env',
-    line: 12,
-    confidence: 'HIGH',
-    status: 'Active',
-    timestamp: '12 Aug 2026, 14:32',
-    repo: 'backend-api'
-  },
-  {
-    id: 'sec-2',
-    type: 'STRIPE_SECRET_KEY',
-    maskedSecret: 'EXAMPLE_STRIPE_SECRET_*******',
-    rawSecret: 'EXAMPLE_STRIPE_SECRET_REDACTED',
-    filePath: 'services/payment.ts',
-    line: 45,
-    confidence: 'HIGH',
-    status: 'Active',
-    timestamp: '11 Aug 2026, 18:10',
-    repo: 'payment-gateway'
-  }
-];
-
-const initialScanHistory: ScanItem[] = [
-  {
-    id: 's-104',
-    scanId: 'Scan #104',
-    date: '19 May 2025, 18:45',
-    repo: 'rakshak-security',
-    duration: '42s',
-    findingsCount: 77,
-    prioritizedCount: 32,
-    riskScore: 36,
-    status: 'Passed',
-    criticalCount: 4,
-    highCount: 8,
-    mediumCount: 29,
-    lowCount: 36,
-    secretsCount: 2
-  }
-];
-
 const SecurityContext = createContext<SecurityContextType | undefined>(undefined);
 
 export const SecurityProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -118,20 +92,32 @@ export const SecurityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [backendOnline, setBackendOnline] = useState<boolean>(false);
   const [backendError, setBackendError] = useState<string | null>(null);
 
-  const [secrets, setSecrets] = useState<SecretItem[]>(initialSecrets);
-  const [scanHistory, setScanHistory] = useState<ScanItem[]>(initialScanHistory);
+  // GitHub Auth State
+  const [currentUser, setCurrentUser] = useState<GitHubUser | null>(null);
+  const [isAuthChecking, setIsAuthChecking] = useState<boolean>(true);
+
+  // GitHub Repositories State
+  const [gitHubRepos, setGitHubRepos] = useState<GitHubRepo[]>([]);
+  const [isLoadingRepos, setIsLoadingRepos] = useState<boolean>(false);
+  const [reposError, setReposError] = useState<string | null>(null);
+  const [selectedGitHubRepo, setSelectedGitHubRepo] = useState<GitHubRepo | null>(null);
+
+  const [secrets, setSecrets] = useState<SecretItem[]>([]);
+  const [scanHistory, setScanHistory] = useState<ScanItem[]>([]);
   const [reports, setReports] = useState<SecurityReport[]>(mockReports);
   const [aiHistory, setAiHistory] = useState<AIAnalysisRecord[]>(mockAIAnalysisHistory);
   const [repositories] = useState<Repository[]>(mockRepositories);
   const [selectedRepo, setSelectedRepo] = useState<Repository>(mockRepositories[0]);
-  const [isGithubConnected, setIsGithubConnected] = useState<boolean>(true);
-  const [overallRiskScore, setOverallRiskScore] = useState<number>(36);
+  const [isGithubConnected, setIsGithubConnected] = useState<boolean>(false);
+  const [overallRiskScore, setOverallRiskScore] = useState<number>(0);
 
+  // Load telemetry data from FastAPI PostgreSQL Backend.
+  // Phase 11A: these endpoints are workspace-scoped server-side, so this must
+  // only ever run for an authenticated session.
   const loadDataFromBackend = useCallback(async () => {
     setIsLoading(true);
     setBackendError(null);
     try {
-      // Fetch summary and findings in parallel
       const [summaryRes, findingsRes] = await Promise.all([
         getSummary(),
         getFindings()
@@ -139,23 +125,115 @@ export const SecurityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
       setSummary(summaryRes);
       setFindings(findingsRes.findings);
-      setOverallRiskScore(summaryRes.overall_risk_score ?? 36);
+      setOverallRiskScore(summaryRes.overall_risk ?? summaryRes.overall_risk_score ?? 0);
       setBackendOnline(true);
+      setBackendError(null);
     } catch (err: any) {
-      console.warn('[Rakshak] Backend API unavailable or connection failed:', err);
-      setBackendOnline(false);
-      setBackendError(err.message || 'Unable to connect to FastAPI backend at http://127.0.0.1:8000');
-      // If backend fails, fallback to local dataset so UI remains interactive
-      setFindings(allMockFindings);
-      setOverallRiskScore(36);
+      console.warn('[Rakshak] Backend API connection failed:', err);
+      setFindings([]);
+      setSummary(null);
+      setOverallRiskScore(0);
+
+      if (err?.status === 401) {
+        // 401 = authentication/session failure, NOT an empty workspace.
+        setBackendOnline(false);
+        setBackendError('Session expired. Please sign in with GitHub again.');
+        setCurrentUser(null);
+        setIsGithubConnected(false);
+      } else {
+        setBackendOnline(false);
+        setBackendError('Unable to connect to the Rakshak backend.');
+      }
     } finally {
       setIsLoading(false);
     }
   }, []);
 
-  useEffect(() => {
-    loadDataFromBackend();
+  // Check GitHub Auth from GET /api/auth/me
+  // Phase 11A: workspace data is loaded ONLY after authentication succeeds.
+  // Unauthenticated users never trigger protected data requests, and 401s are
+  // treated as session failures (not as an empty/global dataset).
+  const checkAuthStatus = useCallback(async () => {
+    setIsAuthChecking(true);
+    try {
+      const authRes = await getAuthMe();
+      if (authRes.authenticated && authRes.user) {
+        setCurrentUser(authRes.user);
+        setIsGithubConnected(true);
+        // Authenticated -> load workspace-scoped data (backend enforces scoping)
+        await loadDataFromBackend();
+      } else {
+        setCurrentUser(null);
+        setIsGithubConnected(false);
+        // No session -> clear any stale protected data from state
+        setFindings([]);
+        setSummary(null);
+        setOverallRiskScore(0);
+        setBackendOnline(false);
+        setBackendError(null);
+      }
+    } catch {
+      setCurrentUser(null);
+      setIsGithubConnected(false);
+      setFindings([]);
+      setSummary(null);
+      setBackendOnline(false);
+      setBackendError(null);
+    } finally {
+      setIsAuthChecking(false);
+    }
   }, [loadDataFromBackend]);
+
+  // Fetch GitHub Repositories from GET /api/github/repos
+  const fetchGitHubRepos = useCallback(async () => {
+    setIsLoadingRepos(true);
+    setReposError(null);
+    try {
+      const res = await getGitHubRepos();
+      setGitHubRepos(res.repositories || []);
+      if (res.repositories && res.repositories.length > 0) {
+        setSelectedGitHubRepo(prev => prev || res.repositories[0]);
+      }
+    } catch (err: any) {
+      const msg = err.message || 'Failed to load GitHub repositories';
+      setReposError(msg);
+      if (msg.includes('authentication required')) {
+        setIsGithubConnected(false);
+        setCurrentUser(null);
+      }
+    } finally {
+      setIsLoadingRepos(false);
+    }
+  }, []);
+
+  // Logout Handler via POST /api/auth/logout
+  const logout = useCallback(async () => {
+    try {
+      await logoutAuth();
+    } catch (e) {
+      console.warn('Logout API error:', e);
+    } finally {
+      setCurrentUser(null);
+      setIsGithubConnected(false);
+      setGitHubRepos([]);
+      setSelectedGitHubRepo(null);
+    }
+  }, []);
+
+  // Phase 11A: mount effect only checks authentication. Protected workspace
+  // data (summary/findings) is fetched exclusively after auth succeeds inside
+  // checkAuthStatus(); GitHub repositories load via the isGithubConnected
+  // effect below. No global/unauthenticated data fetches.
+  useEffect(() => {
+    checkAuthStatus();
+  }, [checkAuthStatus]);
+
+  // When auth succeeds, fetch repositories automatically
+  useEffect(() => {
+    if (isGithubConnected) {
+      fetchGitHubRepos();
+    }
+  }, [isGithubConnected, fetchGitHubRepos]);
 
   const refreshData = async () => {
     await loadDataFromBackend();
@@ -163,6 +241,15 @@ export const SecurityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const connectGithub = () => {
     setIsGithubConnected(true);
+    checkAuthStatus();
+    fetchGitHubRepos();
+  };
+
+  const selectGitHubRepoByName = (owner: string, name: string) => {
+    const found = gitHubRepos.find(r => r.owner === owner && r.name === name);
+    if (found) {
+      setSelectedGitHubRepo(found);
+    }
   };
 
   const selectRepository = (repoId: string) => {
@@ -215,27 +302,52 @@ export const SecurityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       id: `scan-${Date.now()}`,
       scanId: scan.scanId || `Scan #${scanHistory.length + 1}`,
       date: new Date().toLocaleString(),
-      repo: scan.repoName || selectedRepo.name,
+      repo: scan.repoName || (selectedGitHubRepo ? `${selectedGitHubRepo.owner}/${selectedGitHubRepo.name}` : selectedRepo.name),
       duration: scan.duration || '1.2s',
       findingsCount: scan.findings ? scan.findings.length : 0,
-      prioritizedCount: 12,
-      riskScore: scan.score || 36,
-      status: 'Passed'
+      prioritizedCount: (scan.critical || 0) + (scan.high || 0),
+      riskScore: scan.score || scan.overall_risk || scan.overall_risk_score || 0,
+      status: 'Completed'
     };
     setScanHistory(prev => [newScan, ...prev]);
   };
 
   const updateScanFindings = (newFindings: Finding[], scanSummary?: Partial<ApiSummaryResponse>) => {
     setFindings(newFindings);
-    if (scanSummary && scanSummary.overall_risk_score !== undefined) {
-      setOverallRiskScore(scanSummary.overall_risk_score);
-      if (summary) {
-        setSummary(prev => prev ? ({ ...prev, ...scanSummary }) : null);
-      }
+    setBackendOnline(true);
+    setBackendError(null);
+
+    if (scanSummary) {
+      const summaryObj: ApiSummaryResponse = {
+        total_findings: scanSummary.total_findings ?? newFindings.length,
+        critical: scanSummary.critical ?? newFindings.filter(f => f.severity === 'critical').length,
+        high: scanSummary.high ?? newFindings.filter(f => f.severity === 'high').length,
+        medium: scanSummary.medium ?? newFindings.filter(f => f.severity === 'medium').length,
+        low: scanSummary.low ?? newFindings.filter(f => f.severity === 'low').length,
+        overall_risk_score: scanSummary.overall_risk_score ?? scanSummary.overall_risk ?? 0,
+        overall_risk: scanSummary.overall_risk ?? scanSummary.overall_risk_score ?? 0,
+      };
+      setSummary(summaryObj);
+      setOverallRiskScore(summaryObj.overall_risk ?? summaryObj.overall_risk_score ?? 0);
     } else {
       const crit = newFindings.filter(f => f.severity === 'critical').length;
       const high = newFindings.filter(f => f.severity === 'high').length;
-      const score = Math.max(10, Math.min(95, 30 + crit * 10 + high * 4));
+      const med = newFindings.filter(f => f.severity === 'medium').length;
+      const low = newFindings.filter(f => f.severity === 'low').length;
+      const score = newFindings.length > 0
+        ? Math.round(newFindings.reduce((acc, curr) => acc + (curr.riskScore || 0), 0) / newFindings.length)
+        : 0;
+
+      const summaryObj: ApiSummaryResponse = {
+        total_findings: newFindings.length,
+        critical: crit,
+        high: high,
+        medium: med,
+        low: low,
+        overall_risk_score: score,
+        overall_risk: score,
+      };
+      setSummary(summaryObj);
       setOverallRiskScore(score);
     }
   };
@@ -247,6 +359,17 @@ export const SecurityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       isLoading,
       backendOnline,
       backendError,
+      currentUser,
+      isAuthChecking,
+      checkAuthStatus,
+      logout,
+      gitHubRepos,
+      isLoadingRepos,
+      reposError,
+      fetchGitHubRepos,
+      selectedGitHubRepo,
+      setSelectedGitHubRepo,
+      selectGitHubRepoByName,
       secrets,
       scanHistory,
       reports,

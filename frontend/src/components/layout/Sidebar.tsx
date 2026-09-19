@@ -1,10 +1,11 @@
-import { Link, useLocation } from 'react-router-dom';
-import { 
+import { Link, useLocation, useNavigate } from 'react-router-dom';
+import {
   LayoutDashboard,
-  ShieldAlert, 
-  FileText, 
-  BrainCircuit, 
-  Settings as SettingsIcon, 
+  ShieldAlert,
+  History,
+  FileText,
+  BrainCircuit,
+  Settings as SettingsIcon,
   Info,
   LogOut,
   Shield
@@ -12,11 +13,13 @@ import {
 import { GithubIcon as Github } from '@/components/ui/GithubIcon';
 import { cn } from '@/lib/utils';
 import { motion } from 'framer-motion';
+import { useSecurity } from '@/context/SecurityContext';
 
 const navItems = [
   { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
-  { name: 'GitHub / Repository Scan', path: '/repository-scan', icon: Github },
+  { name: 'Repositories', path: '/repositories', icon: Github },
   { name: 'Findings', path: '/findings', icon: ShieldAlert },
+  { name: 'Scan History', path: '/scan-history', icon: History },
   { name: 'Reports', path: '/reports', icon: FileText },
   { name: 'AI Analysis History', path: '/ai-analysis-history', icon: BrainCircuit },
   { name: 'Settings', path: '/settings', icon: SettingsIcon },
@@ -25,22 +28,37 @@ const navItems = [
 
 interface SidebarProps {
   onCloseMobile?: () => void;
+  isCollapsed?: boolean;
+  onToggleSidebar?: () => void;
 }
 
-export default function Sidebar({ onCloseMobile }: SidebarProps) {
+export default function Sidebar({ onCloseMobile, isCollapsed = false, onToggleSidebar }: SidebarProps) {
   const location = useLocation();
+  const navigate = useNavigate();
+  const { logout } = useSecurity();
+
+  const handleLogout = async () => {
+    if (onCloseMobile) onCloseMobile();
+    await logout();
+    navigate('/login');
+  };
 
   return (
-    <aside className="w-64 bg-card border-r border-border h-full flex flex-col justify-between">
+    <aside className="w-full bg-card border-r border-border h-full flex flex-col justify-between">
       <div>
         {/* Brand Header */}
         <div className="h-16 flex items-center justify-between px-6 border-b border-border/50">
-          <Link to="/dashboard" onClick={onCloseMobile} className="flex items-center gap-3">
-            <div className="relative w-8 h-8 flex items-center justify-center">
-              <Shield className="w-7 h-7 text-neonPurple" />
+          <button
+            type="button"
+            onClick={onToggleSidebar}
+            aria-label={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            className="group relative w-8 h-8 flex shrink-0 items-center justify-center cursor-pointer"
+          >
+              <Shield className="w-7 h-7 text-neonPurple transition-transform duration-200 group-hover:scale-110" />
               <span className="absolute text-[10px] font-black text-white leading-none">R</span>
-            </div>
-            <span className="text-xl font-black tracking-wider text-white-pink-gradient">RAKSHAK</span>
+          </button>
+          <Link to="/dashboard" onClick={onCloseMobile} className="ml-3 text-xl font-black tracking-wider text-white-pink-gradient whitespace-nowrap">
+            RAKSHAK
           </Link>
         </div>
 
@@ -51,13 +69,16 @@ export default function Sidebar({ onCloseMobile }: SidebarProps) {
           </div>
 
           {navItems.map((item) => {
-            const isActive = location.pathname === item.path || (item.path === '/dashboard' && (location.pathname === '/' || location.pathname === '/dashboard'));
+            const isRepoRoute = item.path === '/repositories' && (location.pathname === '/repositories' || location.pathname === '/repository-scan');
+            const isDashboardRoute = item.path === '/dashboard' && (location.pathname === '/' || location.pathname === '/dashboard');
+            const isActive = isRepoRoute || isDashboardRoute || location.pathname === item.path;
+
             return (
               <Link key={item.path} to={item.path} onClick={onCloseMobile}>
                 <div className={cn(
-                  "flex items-center gap-3 px-3.5 py-3 rounded-xl transition-all duration-200 group relative text-xs font-semibold cursor-pointer",
-                  isActive 
-                    ? "bg-neonPurple/15 text-white border border-neonPurple/30 glow-neon" 
+                  "flex items-center gap-2.5 px-3.5 py-3 rounded-xl transition-all duration-200 group relative text-xs font-semibold cursor-pointer",
+                  isActive
+                    ? "bg-neonPurple/15 text-white border border-neonPurple/30 glow-neon"
                     : "text-textSecondary hover:bg-white/5 hover:text-foreground"
                 )}>
                   {isActive && (
@@ -79,12 +100,13 @@ export default function Sidebar({ onCloseMobile }: SidebarProps) {
 
       {/* Logout Footer */}
       <div className="p-4 border-t border-border/50">
-        <Link to="/login" onClick={onCloseMobile}>
-          <div className="flex items-center gap-3 px-4 py-3 rounded-xl text-textSecondary hover:bg-danger/10 hover:text-danger transition-colors cursor-pointer text-xs font-semibold">
-            <LogOut size={18} />
-            <span>Logout</span>
-          </div>
-        </Link>
+        <div
+          onClick={handleLogout}
+          className="flex items-center gap-2.5 px-4 py-3 rounded-xl text-textSecondary hover:bg-danger/10 hover:text-danger transition-colors cursor-pointer text-xs font-semibold"
+        >
+          <LogOut size={18} />
+          <span>Logout</span>
+        </div>
       </div>
     </aside>
   );

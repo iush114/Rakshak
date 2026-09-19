@@ -1,0 +1,14 @@
+.env
+.env.*
+.git
+.gitignore
+venv
+__pycache__
+*.pyc
+.pytest_cache
+frontend
+node_modules
+reports/*.json
+test_*.py
+test-project
+test_webhook.db

@@ -13,7 +13,6 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
   security:
@@ -105,17 +104,3 @@ jobs:
           name: rakshak-security-report
           path: reports/
           retention-days: 30
-
-      # 12. Login to GitHub Container Registry
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      # 13. Push Rakshak Docker image
-      - name: Push Rakshak Docker image
-        run: |
-          docker tag rakshak:ci ghcr.io/iush114/rakshak:latest
-          docker push ghcr.io/iush114/rakshak:latest

@@ -23,7 +23,17 @@ def parse_gitleaks_report(report_path: str) -> list[SecurityFinding]:
     findings = []
 
     for secret in report:
-        rule_id = secret.get("RuleID", "unknown-secret")
+        raw_rule_id = str(secret.get("RuleID") or "").strip()
+        rule_id = raw_rule_id or "unknown-secret"
+
+        # Gitleaks' stable finding identifier is its rule ID
+        # (e.g. "aws-access-token", "generic-api-key"). Namespaced so it can
+        # never collide with a CVE/GHSA or code-pattern identifier. Left empty
+        # (never invented) when the report carries no rule ID.
+        vulnerability_id = (
+            f"GITLEAKS-{raw_rule_id.upper()}" if raw_rule_id else ""
+        )
+
         description = secret.get(
             "Description",
             "Potential secret detected in source code.",
@@ -42,6 +52,7 @@ def parse_gitleaks_report(report_path: str) -> list[SecurityFinding]:
                 tool="Gitleaks",
                 severity="CRITICAL",
                 title=f"Secret detected: {rule_id}",
+                vulnerability_id=vulnerability_id,
                 description=(
                     f"{description}\n"
                     f"File: {file_path}\n"

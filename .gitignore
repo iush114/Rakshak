@@ -21,3 +21,10 @@ __pycache__/
 # OS files
 .DS_Store
 Thumbs.db
+
+*.log
+*.db
+/reports/*.json
+/trivy-image-results.json
+/test-project-trivy.json
+/package-lock.json

@@ -273,8 +273,21 @@ def analyze_with_cloudflare(
 
     production = finding.get(
         "production",
-        True,
+        False,
     )
+
+    scanner_type = finding.get("scanner_type", "")
+    target = finding.get("target", "")
+    package_name = finding.get("package_name", "")
+    installed_version = finding.get("installed_version", "")
+    evidence = (
+        finding.get("evidence")
+        or finding.get("code_snippet")
+        or finding.get("snippet")
+        or ""
+    )
+    file_path = finding.get("file_path", "") or target
+    line_number = finding.get("line_number", "") or finding.get("line", "")
 
     fixed_version_text = (
         fixed_version
@@ -320,28 +333,38 @@ Exploitability: {exploitability}
 
 Affected Packages: {packages_text}
 
+Scanner Type: {scanner_type or "Unknown"}
+
+Affected Component: {package_name or target or "Unknown"}
+
+Installed Version: {installed_version or "Unknown"}
+
 Fixed Version: {fixed_version_text}
+
+File: {file_path or "Unknown"}
+
+Line: {line_number or "Unknown"}
+
+Evidence: {evidence or "Not supplied"}
 
 Production: {production}
 
 Return ONLY valid JSON with exactly these four keys:
 
 {{
-  "ai_explanation": "Brief explanation of the vulnerability.",
-  "potential_impact": "Brief realistic security impact.",
-  "recommended_action": "Brief remediation or mitigation based only on supplied data.",
-  "risk_summary": "Brief summary of severity, priority, risk score, and exploitability."
+  "ai_explanation": "Interpret the security mechanism: what is vulnerable, what is the underlying problem, how could it be abused, what is the practical consequence. Do NOT repeat the vulnerability ID, title, or description.",
+  "potential_impact": "Describe the concrete security consequence of THIS specific finding. Use conditional language when exploitability depends on context. Do not use generic phrases like 'could affect the affected component'.",
+  "recommended_action": "Provide specific remediation for THIS vulnerability type. For code findings: code-level fix. For dependencies: package upgrade with version if available. For secrets: revoke/rotate. Do not give generic advice.",
+  "risk_summary": "Concise interpretation: severity, priority, risk score, exploitability, and main consequence. Do NOT repeat the full title."
 }}
 
 Rules:
-- JSON only.
-- No Markdown.
-- No code fences.
-- No text before or after JSON.
-- Keep each field concise.
-- Do not invent CVSS data.
-- Do not invent exploits.
-- Do not invent package versions.
+- JSON only. No Markdown. No code fences. No text before/after JSON.
+- Each field must be materially specific to this finding, not interchangeable severity text.
+- Do NOT copy or paraphrase the Title or Description. Interpret the security mechanism, practical impact, and remediation using the supplied evidence.
+- Use the vulnerability ID, package/component, file, line, or evidence when those values are supplied.
+- Do not invent CVSS data, exploits, package versions, production exposure, internet exposure, exploit availability, active exploitation, affected user counts, or CIA impact unless the finding data supports it.
+- Represent the provided risk_score ({risk_score}/100) and exploitability ({exploitability}) accurately. Do not reinterpret them.
 """
 
     # =====================================================
