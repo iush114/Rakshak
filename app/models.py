@@ -54,6 +54,12 @@ class User(Base):
         back_populates="user",
     )
 
+    notifications = relationship(
+        "Notification",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+
 
 class UserInstallation(Base):
     """Maps a GitHub App installation to the Rakshak workspace that established it.
@@ -396,3 +402,90 @@ class FindingLifecycle(Base):
     occurrence_count: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     first_seen_scan_id: Mapped[str] = mapped_column(String(36))
     last_seen_scan_id: Mapped[str] = mapped_column(String(36))
+
+class Notification(Base):
+    __tablename__ = "notifications"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True,
+    )
+
+    user_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    scan_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("scans.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    finding_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("findings.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    notification_type: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        index=True,
+    )
+
+    title: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+    )
+
+    message: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+    )
+
+    severity: Mapped[str | None] = mapped_column(
+        String(20),
+        nullable=True,
+        index=True,
+    )
+
+    is_read: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+        index=True,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+        index=True,
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "scan_id",
+            "notification_type",
+            name="uq_notifications_user_scan_type",
+        ),
+    )
+
+    user = relationship(
+        "User",
+        back_populates="notifications",
+    )
+    scan = relationship(
+        "Scan",
+    )
+    finding = relationship(
+        "Finding",
+    )
+

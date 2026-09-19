@@ -593,3 +593,72 @@ export async function checkBackendHealth(): Promise<boolean> {
     return false;
   }
 }
+
+
+// ============================================================
+// NOTIFICATIONS API CLIENT METHODS
+// ============================================================
+
+export interface NotificationItem {
+  id: number;
+  scan_id?: string | null;
+  finding_id?: string | null;
+  notification_type: string;
+  title: string;
+  message: string;
+  severity?: string | null;
+  is_read: boolean;
+  created_at: string;
+}
+
+export interface NotificationsResponse {
+  notifications: NotificationItem[];
+  unread_count: number;
+}
+
+/**
+ * Fetch workspace-scoped notifications
+ */
+export async function getNotifications(limit: number = 20): Promise<NotificationsResponse> {
+  const url = new URL(`${API_BASE_URL}/notifications`);
+  if (limit) url.searchParams.set('limit', String(limit));
+
+  const res = await fetch(url.toString(), {
+    headers: { 'Accept': 'application/json' },
+    credentials: 'include',
+  });
+  if (!res.ok) {
+    throw createApiError(`Failed to fetch notifications: HTTP ${res.status}`, res.status);
+  }
+  return res.json();
+}
+
+/**
+ * Mark a single notification as read
+ */
+export async function markNotificationRead(notificationId: number): Promise<{ id: number; is_read: boolean; unread_count: number }> {
+  const res = await fetch(`${API_BASE_URL}/notifications/${encodeURIComponent(notificationId)}/read`, {
+    method: 'POST',
+    headers: { 'Accept': 'application/json' },
+    credentials: 'include',
+  });
+  if (!res.ok) {
+    throw createApiError(`Failed to mark notification as read: HTTP ${res.status}`, res.status);
+  }
+  return res.json();
+}
+
+/**
+ * Mark all notifications for the authenticated user as read
+ */
+export async function markAllNotificationsRead(): Promise<{ message: string; unread_count: number }> {
+  const res = await fetch(`${API_BASE_URL}/notifications/read-all`, {
+    method: 'POST',
+    headers: { 'Accept': 'application/json' },
+    credentials: 'include',
+  });
+  if (!res.ok) {
+    throw createApiError(`Failed to mark all notifications as read: HTTP ${res.status}`, res.status);
+  }
+  return res.json();
+}

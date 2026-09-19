@@ -23,9 +23,10 @@ from starlette.responses import JSONResponse, RedirectResponse
 
 from app.database import Base, engine, get_db
 from app.config import is_production, is_within_allowed_root
-from app.models import Finding, GitHubWebhookDelivery, Scan
+from app.models import Finding, GitHubWebhookDelivery, Notification, Scan
 from app.models import FindingLifecycle, User, UserInstallation, UserRepository
 from app.finding_lifecycle import process_completed_scan_lifecycle
+from app.notification_service import create_scan_notifications
 from app.security_gate import persist_security_gate
 from app.scanner_service import (
     run_code_scan,
@@ -993,8 +994,9 @@ def scan_project(
         scan.overall_risk = overall_risk
         scan.completed_at = datetime.utcnow()
 
-        process_completed_scan_lifecycle(db, scan, finding_models)
+        fixed_count = process_completed_scan_lifecycle(db, scan, finding_models)
         persist_security_gate(db, scan)
+        create_scan_notifications(db, scan, finding_models, fixed_count=fixed_count)
 
         db.commit()
 
@@ -1017,16 +1019,20 @@ def scan_project(
     except HTTPException:
         db.rollback()
         scan = db.query(Scan).filter(Scan.id == scan_id).first()
-        scan.status = "failed"
-        scan.completed_at = datetime.utcnow()
+        if scan:
+            scan.status = "failed"
+            scan.completed_at = datetime.utcnow()
+            create_scan_notifications(db, scan)
         db.commit()
         raise
 
     except Exception as exc:
         db.rollback()
         scan = db.query(Scan).filter(Scan.id == scan_id).first()
-        scan.status = "failed"
-        scan.completed_at = datetime.utcnow()
+        if scan:
+            scan.status = "failed"
+            scan.completed_at = datetime.utcnow()
+            create_scan_notifications(db, scan)
         db.commit()
 
         raise HTTPException(
@@ -1667,6 +1673,115 @@ def analyze_single_finding(
         "potential_impact": finding.potential_impact,
         "recommended_action": finding.recommended_action,
         "risk_summary": finding.risk_summary,
+    }
+
+
+
+
+# ============================================================
+# NOTIFICATIONS API (WORKSPACE-SCOPED)
+# ============================================================
+
+
+@app.get("/api/notifications")
+def list_notifications(
+    limit: int = Query(default=50, ge=1, le=100),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Retrieve workspace notifications for the authenticated user, newest first."""
+    notifications = (
+        db.query(Notification)
+        .filter(Notification.user_id == current_user.id)
+        .order_by(Notification.created_at.desc(), Notification.id.desc())
+        .limit(limit)
+        .all()
+    )
+
+    unread_count = (
+        db.query(Notification)
+        .filter(
+            Notification.user_id == current_user.id,
+            Notification.is_read.is_(False),
+        )
+        .count()
+    )
+
+    return {
+        "notifications": [
+            {
+                "id": n.id,
+                "user_id": n.user_id,
+                "scan_id": n.scan_id,
+                "finding_id": n.finding_id,
+                "notification_type": n.notification_type,
+                "title": n.title,
+                "message": n.message,
+                "severity": n.severity,
+                "is_read": n.is_read,
+                "created_at": n.created_at.isoformat() if n.created_at else None,
+            }
+            for n in notifications
+        ],
+        "unread_count": unread_count,
+    }
+
+
+@app.post("/api/notifications/{notification_id}/read")
+def mark_notification_read(
+    notification_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Mark a single workspace notification as read."""
+    notif = (
+        db.query(Notification)
+        .filter(
+            Notification.id == notification_id,
+            Notification.user_id == current_user.id,
+        )
+        .first()
+    )
+
+    if not notif:
+        raise HTTPException(status_code=404, detail="Notification not found")
+
+    notif.is_read = True
+    db.commit()
+
+    unread_count = (
+        db.query(Notification)
+        .filter(
+            Notification.user_id == current_user.id,
+            Notification.is_read.is_(False),
+        )
+        .count()
+    )
+
+    return {
+        "status": "success",
+        "notification_id": notif.id,
+        "is_read": True,
+        "unread_count": unread_count,
+    }
+
+
+@app.post("/api/notifications/read-all")
+def mark_all_notifications_read(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Mark all unread workspace notifications as read for the current user."""
+    db.query(Notification).filter(
+        Notification.user_id == current_user.id,
+        Notification.is_read.is_(False),
+    ).update({"is_read": True}, synchronize_session=False)
+    db.commit()
+
+    return {
+        "status": "success",
+        "message": "All notifications marked as read",
+        "unread_count": 0,
     }
 
 

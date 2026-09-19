@@ -82,6 +82,7 @@ from app.github_checks import CheckRunError, create_check_run, complete_check_ru
 from app.github_service import download_repository
 from app.models import Finding, Scan
 from app.finding_lifecycle import process_completed_scan_lifecycle
+from app.notification_service import create_scan_notifications
 from app.security_gate import persist_security_gate
 from app.scanner_service import (
     run_code_scan,
@@ -390,8 +391,9 @@ def run_github_repository_scan(
         scan.overall_risk = overall_risk
         scan.completed_at = datetime.utcnow()
 
-        process_completed_scan_lifecycle(db, scan, finding_models)
+        fixed_count = process_completed_scan_lifecycle(db, scan, finding_models)
         gate_result = persist_security_gate(db, scan)
+        create_scan_notifications(db, scan, finding_models, fixed_count=fixed_count)
 
         db.commit()
 
@@ -436,8 +438,10 @@ def run_github_repository_scan(
         # Mark failed — do not expose internal errors to the webhook caller
         db.rollback()
         scan = db.query(Scan).filter(Scan.id == scan_id).first()
-        scan.status = "failed"
-        scan.completed_at = datetime.utcnow()
+        if scan:
+            scan.status = "failed"
+            scan.completed_at = datetime.utcnow()
+            create_scan_notifications(db, scan)
 
         try:
             db.commit()

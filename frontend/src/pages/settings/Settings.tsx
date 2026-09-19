@@ -1,12 +1,12 @@
 import { useState } from 'react';
-import { 
-  Settings as SettingsIcon, 
-  Sliders, 
-  Key, 
-  Bell, 
-  Palette, 
-  ShieldCheck, 
-  Save, 
+import {
+  Settings as SettingsIcon,
+  Sliders,
+  Key,
+  Bell,
+  Palette,
+  ShieldCheck,
+  Save,
   CheckCircle2
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -25,23 +25,28 @@ export default function Settings() {
   const [itemsPerPage, setItemsPerPage] = useState(() => localStorage.getItem('rakshak_items_per_page') || '25');
   const [autoRefresh, setAutoRefresh] = useState(() => localStorage.getItem('rakshak_auto_refresh') !== 'false');
 
-  // API Config (UI only - Demo)
-  const [apiKey, setApiKey] = useState('EXAMPLE_API_KEY_REDACTED_12345');
-  const [apiEndpoint, setApiEndpoint] = useState('https://api.rakshak.sec/v1/scan');
-  const [aiModel, setAiModel] = useState('Rakshak AI (Default)');
+  // API Config
+  const [apiKey, setApiKey] = useState(() => localStorage.getItem('rakshak_api_key') || 'EXAMPLE_API_KEY_REDACTED_12345');
+  const [apiEndpoint, setApiEndpoint] = useState(() => localStorage.getItem('rakshak_api_endpoint') || 'http://127.0.0.1:8000/api/scan');
+  const [aiModel, setAiModel] = useState(() => localStorage.getItem('rakshak_ai_model') || 'Rakshak AI (Default)');
 
-  // Notifications Settings
-  const [emailAlerts, setEmailAlerts] = useState(true);
-  const [slackWebhook, setSlackWebhook] = useState('https://hooks.slack.com/services/DEMO/WEBHOOK');
-  const [criticalOnly, setCriticalOnly] = useState(true);
+  // Notification Preferences (Workspace Preferences)
+  const [inAppAlerts, setInAppAlerts] = useState(() => localStorage.getItem('rakshak_inapp_notifications') !== 'false');
+  const [criticalOnly, setCriticalOnly] = useState(() => localStorage.getItem('rakshak_notifications_critical_only') === 'true');
+  const [scanCompletionNotices, setScanCompletionNotices] = useState(() => localStorage.getItem('rakshak_scan_notices') !== 'false');
 
   // Appearance Settings
-  const [enableGlowEffects, setEnableGlowEffects] = useState(true);
+  const [enableGlowEffects, setEnableGlowEffects] = useState(() => localStorage.getItem('rakshak_glow_effects') !== 'false');
 
   // Security Preferences
-  const [enable2FA, setEnable2FA] = useState(true);
-  const [sessionTimeout, setSessionTimeout] = useState('30');
+  const [enable2FA, setEnable2FA] = useState(() => localStorage.getItem('rakshak_enable_2fa') !== 'false');
+  const [sessionTimeout, setSessionTimeout] = useState(() => localStorage.getItem('rakshak_session_timeout') || '30');
   const [githubOAuthStatus] = useState('Connected');
+
+  const handleGlowToggle = (checked: boolean) => {
+    setEnableGlowEffects(checked);
+    document.documentElement.setAttribute('data-glow', checked ? 'true' : 'false');
+  };
 
   // Save Settings to LocalStorage
   const handleSave = (e: React.FormEvent) => {
@@ -50,6 +55,16 @@ export default function Settings() {
     localStorage.setItem('rakshak_risk_threshold', riskThreshold);
     localStorage.setItem('rakshak_items_per_page', itemsPerPage);
     localStorage.setItem('rakshak_auto_refresh', String(autoRefresh));
+    localStorage.setItem('rakshak_api_key', apiKey);
+    localStorage.setItem('rakshak_api_endpoint', apiEndpoint);
+    localStorage.setItem('rakshak_ai_model', aiModel);
+    localStorage.setItem('rakshak_inapp_notifications', String(inAppAlerts));
+    localStorage.setItem('rakshak_notifications_critical_only', String(criticalOnly));
+    localStorage.setItem('rakshak_scan_notices', String(scanCompletionNotices));
+    localStorage.setItem('rakshak_glow_effects', String(enableGlowEffects));
+    document.documentElement.setAttribute('data-glow', enableGlowEffects ? 'true' : 'false');
+    localStorage.setItem('rakshak_enable_2fa', String(enable2FA));
+    localStorage.setItem('rakshak_session_timeout', sessionTimeout);
 
     setSavedSuccess(true);
     setTimeout(() => setSavedSuccess(false), 2500);
@@ -57,7 +72,7 @@ export default function Settings() {
 
   return (
     <div className="space-y-6 pb-12">
-      
+
       {/* HEADER */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-border/50 pb-5">
         <div>
@@ -89,6 +104,7 @@ export default function Settings() {
         ].map((tab) => (
           <button
             key={tab.id}
+            type="button"
             onClick={() => setActiveSection(tab.id as any)}
             className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
               activeSection === tab.id
@@ -118,8 +134,8 @@ export default function Settings() {
               <CardContent className="space-y-4 text-xs font-sans">
                 <div className="space-y-1.5">
                   <label className="text-textSecondary font-semibold">Application Name</label>
-                  <Input 
-                    type="text" 
+                  <Input
+                    type="text"
                     value={appName}
                     onChange={(e) => setAppName(e.target.value)}
                     className="bg-[#090014] border-[#2A1240] text-white text-xs h-10 rounded-xl"
@@ -127,9 +143,11 @@ export default function Settings() {
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="text-textSecondary font-semibold">Critical Risk Score Threshold (0-100)</label>
-                  <Input 
-                    type="number" 
+                  <label className="text-textSecondary font-semibold">Risk Alert Threshold Score (1-100)</label>
+                  <Input
+                    type="number"
+                    min="1"
+                    max="100"
                     value={riskThreshold}
                     onChange={(e) => setRiskThreshold(e.target.value)}
                     className="bg-[#090014] border-[#2A1240] text-white text-xs h-10 rounded-xl"
@@ -143,45 +161,38 @@ export default function Settings() {
                     onChange={(e) => setItemsPerPage(e.target.value)}
                     className="w-full bg-[#090014] border border-[#2A1240] text-white text-xs h-10 rounded-xl px-3 focus:outline-none focus:border-neonPurple"
                   >
-                    <option value="10">10 items</option>
-                    <option value="25">25 items</option>
-                    <option value="50">50 items</option>
-                    <option value="100">100 items</option>
+                    <option value="10">10 Findings</option>
+                    <option value="25">25 Findings</option>
+                    <option value="50">50 Findings</option>
+                    <option value="100">100 Findings</option>
                   </select>
                 </div>
 
-                <div className="flex items-center justify-between p-3 rounded-xl bg-[#090014] border border-[#2A1240] pt-3">
+                <div className="flex items-center justify-between p-3 rounded-xl bg-[#090014] border border-[#2A1240]">
                   <div>
-                    <span className="font-bold text-white block">Auto Refresh Dashboard Data</span>
-                    <span className="text-textSecondary text-[11px]">Periodically poll local scan telemetry every 60 seconds</span>
+                    <span className="font-bold text-white block">Auto-Refresh Dashboard Data</span>
+                    <span className="text-textSecondary text-[11px]">Periodically poll backend telemetry every 30 seconds</span>
                   </div>
-                  <Checkbox 
-                    checked={autoRefresh}
-                    onCheckedChange={(c) => setAutoRefresh(!!c)}
-                  />
+                  <Checkbox checked={autoRefresh} onCheckedChange={(c) => setAutoRefresh(!!c)} />
                 </div>
               </CardContent>
             </Card>
           )}
 
-          {/* 2. API CONFIGURATION (UI ONLY) */}
+          {/* 2. API CONFIGURATION SECTION */}
           {activeSection === 'api' && (
             <Card>
               <CardHeader>
-                <CardTitle className="text-lg font-bold text-white">API Configuration</CardTitle>
+                <CardTitle className="text-lg font-bold text-white">API & Scanner Integrations</CardTitle>
                 <CardDescription className="text-xs text-textSecondary">
-                  UI prototype credentials and endpoint orchestration (UI Only)
+                  Backend connection settings and AI analyzer parameters
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4 text-xs font-sans">
-                <div className="p-3 rounded-xl bg-neonPurple/10 border border-neonPurple/30 text-neonPurple text-xs">
-                  ℹ API Configuration is UI-only in this frontend prototype.
-                </div>
-
                 <div className="space-y-1.5">
-                  <label className="text-textSecondary font-semibold">Rakshak API Secret Key</label>
-                  <Input 
-                    type="password" 
+                  <label className="text-textSecondary font-semibold">API Secret Key Token</label>
+                  <Input
+                    type="password"
                     value={apiKey}
                     onChange={(e) => setApiKey(e.target.value)}
                     className="bg-[#090014] border-[#2A1240] text-white font-mono text-xs h-10 rounded-xl"
@@ -190,8 +201,8 @@ export default function Settings() {
 
                 <div className="space-y-1.5">
                   <label className="text-textSecondary font-semibold">Backend Scan Service Endpoint</label>
-                  <Input 
-                    type="text" 
+                  <Input
+                    type="text"
                     value={apiEndpoint}
                     onChange={(e) => setApiEndpoint(e.target.value)}
                     className="bg-[#090014] border-[#2A1240] text-white font-mono text-xs h-10 rounded-xl"
@@ -220,34 +231,42 @@ export default function Settings() {
               <CardHeader>
                 <CardTitle className="text-lg font-bold text-white">Notification Preferences</CardTitle>
                 <CardDescription className="text-xs text-textSecondary">
-                  Configure alert dispatch channels and threshold triggers
+                  Workspace preferences for in-app alert thresholds and scan completion notices
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4 text-xs font-sans">
                 <div className="flex items-center justify-between p-3 rounded-xl bg-[#090014] border border-[#2A1240]">
                   <div>
-                    <span className="font-bold text-white block">Email Threat Alerts (Demo Preference)</span>
-                    <span className="text-textSecondary text-[11px]">Save your preference for email alert notifications (frontend only)</span>
+                    <span className="font-bold text-white block">In-App Threat Alerts</span>
+                    <span className="text-textSecondary text-[11px]">Save preference to receive in-app alerts for security scan events</span>
                   </div>
-                  <Checkbox checked={emailAlerts} onCheckedChange={(c) => setEmailAlerts(!!c)} />
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="text-textSecondary font-semibold">Slack Webhook URL</label>
-                  <Input 
-                    type="text" 
-                    value={slackWebhook}
-                    onChange={(e) => setSlackWebhook(e.target.value)}
-                    className="bg-[#090014] border-[#2A1240] text-white font-mono text-xs h-10 rounded-xl"
-                  />
+                  <Checkbox checked={inAppAlerts} onCheckedChange={(c) => setInAppAlerts(!!c)} />
                 </div>
 
                 <div className="flex items-center justify-between p-3 rounded-xl bg-[#090014] border border-[#2A1240]">
                   <div>
-                    <span className="font-bold text-white block">Dispatch Critical & High Severity Only</span>
-                    <span className="text-textSecondary text-[11px]">Suppress notifications for medium and low findings</span>
+                    <span className="font-bold text-white block">Critical & High Severity Threshold</span>
+                    <span className="text-textSecondary text-[11px]">Save preference to filter security alerts to critical and high severity findings only</span>
                   </div>
                   <Checkbox checked={criticalOnly} onCheckedChange={(c) => setCriticalOnly(!!c)} />
+                </div>
+
+                <div className="flex items-center justify-between p-3 rounded-xl bg-[#090014] border border-[#2A1240]">
+                  <div>
+                    <span className="font-bold text-white block">Scan Completion Notices</span>
+                    <span className="text-textSecondary text-[11px]">Save preference to display notification notices when repository scans complete</span>
+                  </div>
+                  <Checkbox checked={scanCompletionNotices} onCheckedChange={(c) => setScanCompletionNotices(!!c)} />
+                </div>
+
+                <div className="p-3.5 rounded-xl bg-[#12051F]/90 border border-border/70 text-textSecondary text-[11px] space-y-1">
+                  <div className="flex items-center gap-2 font-semibold text-white">
+                    <Bell size={13} className="text-neonPurple" />
+                    <span>Notification Delivery Status</span>
+                  </div>
+                  <p>
+                    In-app security alerts and scan notices are actively delivered to the notification bell in the top navigation bar. Preferences are applied locally to your workspace views. External notification channels (Email SMTP / Slack Webhooks) are not configured.
+                  </p>
                 </div>
               </CardContent>
             </Card>
@@ -278,7 +297,7 @@ export default function Settings() {
                     <span className="font-bold text-white block">Enable Neon Glow Effects & Glassmorphism</span>
                     <span className="text-textSecondary text-[11px]">Render real-time CSS glowing halos around security badges</span>
                   </div>
-                  <Checkbox checked={enableGlowEffects} onCheckedChange={(c) => setEnableGlowEffects(!!c)} />
+                  <Checkbox checked={enableGlowEffects} onCheckedChange={(c) => handleGlowToggle(!!c)} />
                 </div>
               </CardContent>
             </Card>
@@ -304,8 +323,8 @@ export default function Settings() {
 
                 <div className="space-y-1.5">
                   <label className="text-textSecondary font-semibold">Idle Session Timeout (Minutes)</label>
-                  <Input 
-                    type="number" 
+                  <Input
+                    type="number"
                     value={sessionTimeout}
                     onChange={(e) => setSessionTimeout(e.target.value)}
                     className="bg-[#090014] border-[#2A1240] text-white text-xs h-10 rounded-xl"

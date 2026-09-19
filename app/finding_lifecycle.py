@@ -141,9 +141,12 @@ def process_completed_scan_lifecycle(
         FindingLifecycle.scanner_type.in_(enabled_types or ("__none__",)),
         FindingLifecycle.lifecycle_status != "fixed",
     ).all()
+    fixed_count = 0
     for lifecycle in existing:
         if lifecycle.finding_key in current_by_key:
             continue
         lifecycle.lifecycle_status = "fixed"
         lifecycle.fixed_at = now
+        fixed_count += 1
         _copy_lifecycle_to_findings(db, lifecycle)
+    return fixed_count

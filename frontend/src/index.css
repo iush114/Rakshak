@@ -1,4 +1,4 @@
-@tailwind base;
+﻿@tailwind base;
 @tailwind components;
 @tailwind utilities;
 
@@ -70,4 +70,30 @@
     backdrop-filter: blur(12px);
     border: 1px solid rgba(42, 18, 64, 0.8);
   }
+}
+
+/* Controlled Glow and Glassmorphism */
+[data-glow="false"] .glow-neon,
+[data-glow="false"] .glow-danger,
+[data-glow="false"] [class*="glow-"],
+[data-glow="false"] [class*="shadow-[0_0_"],
+[data-glow="false"] [class*="drop-shadow-[0_0_"] {
+  box-shadow: none !important;
+  filter: none !important;
+  drop-shadow: none !important;
+}
+
+[data-glow="false"] [class*="hover:shadow-[0_0_"]:hover,
+[data-glow="false"] [class*="hover:glow-"]:hover {
+  box-shadow: none !important;
+}
+
+[data-glow="false"] .glass,
+[data-glow="false"] [class*="backdrop-blur"] {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+[data-glow="false"] .ambient-glow {
+  display: none !important;
 }
