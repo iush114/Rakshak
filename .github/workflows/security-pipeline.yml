@@ -20,6 +20,21 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: rakshak
+          POSTGRES_PASSWORD: rakshak_test_password
+          POSTGRES_DB: rakshak_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       # 1. Checkout Rakshak source code
       - name: Checkout Rakshak
@@ -44,14 +59,29 @@ jobs:
         run: |
           python -m compileall app
 
-      # 5. Run Gitleaks secret scan
+      # 5. Run Database Migrations
+      - name: Run Alembic migrations
+        env:
+          DATABASE_URL: postgresql://rakshak:rakshak_test_password@localhost:5432/rakshak_test
+        run: |
+          python -m alembic upgrade head
+
+      # 6. Run automated test suite
+      - name: Run automated test suite
+        env:
+          SESSION_SECRET: ci-test-session-secret-for-rakshak-pipeline-validation
+          GITHUB_WEBHOOK_SECRET: ci-test-webhook-secret-123
+        run: |
+          python -m pytest -q
+
+      # 7. Run Gitleaks secret scan
       - name: Gitleaks secret scan
         uses: gitleaks/gitleaks-action@v3
         continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # 6. Generate Gitleaks JSON report
+      # 8. Generate Gitleaks JSON report
       - name: Generate Gitleaks JSON report
         continue-on-error: true
         run: |
@@ -62,7 +92,7 @@ jobs:
             --report-path reports/gitleaks-results.json \
             --exit-code 0
 
-      # 7. Trivy filesystem scan
+      # 9. Trivy filesystem scan
       - name: Trivy filesystem scan
         uses: aquasecurity/trivy-action@v0.36.0
         continue-on-error: true
@@ -75,17 +105,29 @@ jobs:
           ignore-unfixed: true
           exit-code: "0"
 
-      # 8. Run Rakshak security analysis
-      - name: Run Rakshak security analysis
+      # 10. Validate Rakshak application startup & readiness
+      - name: Validate Rakshak application startup & readiness
+        env:
+          DATABASE_URL: postgresql://rakshak:rakshak_test_password@localhost:5432/rakshak_test
+          SESSION_SECRET: ci-test-session-secret-for-rakshak-pipeline-validation
         run: |
-          python -m app.main
+          python -c "from fastapi.testclient import TestClient; from app.main import app; client = TestClient(app); h = client.get('/health'); assert h.status_code == 200; r = client.get('/ready'); assert r.status_code == 200; print('[OK] Application health and readiness verified.')"
 
-      # 9. Build Rakshak Docker image
+      # 11. Build Rakshak Docker image
       - name: Build Rakshak Docker image
         run: |
           docker build -t rakshak:ci .
 
-      # 10. Trivy Docker image scan
+      # 12. Validate Rakshak Docker container health & readiness
+      - name: Validate Rakshak Docker container health & readiness
+        run: |
+          docker run -d --name rakshak-ci-container -p 8000:8000 -e DATABASE_URL=sqlite:///./test.db -e SESSION_SECRET=ci-docker-session-secret rakshak:ci
+          sleep 5
+          python -c "import urllib.request; resp = urllib.request.urlopen('http://127.0.0.1:8000/health'); assert resp.getcode() == 200"
+          python -c "import urllib.request; resp = urllib.request.urlopen('http://127.0.0.1:8000/ready'); assert resp.getcode() == 200"
+          docker rm -f rakshak-ci-container
+
+      # 13. Trivy Docker image scan
       - name: Trivy Docker image scan
         uses: aquasecurity/trivy-action@v0.36.0
         continue-on-error: true
@@ -97,9 +139,10 @@ jobs:
           ignore-unfixed: true
           exit-code: "0"
 
-      # 11. Upload Rakshak security report
+      # 14. Upload Rakshak security report
       - name: Upload Rakshak security report
         uses: actions/upload-artifact@v6
+        if: always()
         with:
           name: rakshak-security-report
           path: reports/
