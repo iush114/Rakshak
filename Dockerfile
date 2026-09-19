@@ -1,9 +1,20 @@
+FROM aquasec/trivy:0.74.0 AS trivy-bin
+FROM zricethezav/gitleaks:v8.30.1 AS gitleaks-bin
+
 FROM python:3.12-slim
 
 WORKDIR /app
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
 	PYTHONUNBUFFERED=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+	git \
+	ca-certificates \
+	&& rm -rf /var/lib/apt/lists/*
+
+COPY --from=trivy-bin /usr/local/bin/trivy /usr/local/bin/trivy
+COPY --from=gitleaks-bin /usr/bin/gitleaks /usr/local/bin/gitleaks
 
 COPY requirements.txt .
 
