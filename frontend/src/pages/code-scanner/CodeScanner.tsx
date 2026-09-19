@@ -1,3 +1,4 @@
+import { formatScore, formatNumber } from '@/utils/formatters';
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Editor from '@monaco-editor/react';
@@ -426,7 +427,7 @@ export default function CodeScanner() {
                           <div className="flex items-center gap-3 font-mono">
                             <FileCode size={16} className="text-neonPurple" />
                             <span className="text-white font-semibold">{file.name}</span>
-                            <span className="text-[#C4B5FD]/60 text-[11px]">({(file.size / 1024).toFixed(1)} KB)</span>
+                            <span className="text-[#C4B5FD]/60 text-[11px]">({formatNumber(file.size / 1024, 2)} KB)</span>
                           </div>
                           <button
                             onClick={() => removeFile(idx)}
@@ -555,7 +556,7 @@ export default function CodeScanner() {
                     />
                   </svg>
                   <div className="absolute flex flex-col items-center justify-center">
-                    <span className="text-4xl font-black text-white">{scanResult.score}</span>
+                    <span className="text-4xl font-black text-white">{formatScore(scanResult.score)}</span>
                     <span className="text-xs text-textSecondary font-bold">/ 100</span>
                   </div>
                 </div>

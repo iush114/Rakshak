@@ -1,3 +1,4 @@
+import { formatCount } from '@/utils/formatters';
 import { useState, useRef, useEffect, useCallback } from 'react';
 import {
   Bell,
@@ -292,7 +293,7 @@ export default function Topbar({ onToggleMobileMenu, isSidebarCollapsed = false 
             <Bell size={16} />
             {visibleUnreadCount > 0 && (
               <span className="absolute -top-1 -right-1 flex h-4 min-w-4 px-1 items-center justify-center rounded-full bg-pinkAccent text-[9px] font-bold text-white ring-2 ring-background animate-in zoom-in-50">
-                {visibleUnreadCount > 9 ? '9+' : visibleUnreadCount}
+                {visibleUnreadCount > 9 ? '9+' : formatCount(visibleUnreadCount)}
               </span>
             )}
           </Button>
@@ -317,7 +318,7 @@ export default function Topbar({ onToggleMobileMenu, isSidebarCollapsed = false 
                     </button>
                   )}
                   <span className="text-[10px] text-textSecondary font-mono px-2 py-0.5 rounded-full bg-[#090014] border border-[#2A1240]">
-                    {visibleUnreadCount} unread
+                    {formatCount(visibleUnreadCount)} unread
                   </span>
                 </div>
               </div>

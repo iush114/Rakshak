@@ -1,3 +1,4 @@
+import { formatScore, formatCount } from '@/utils/formatters';
 import { useState } from 'react';
 import { createPortal } from 'react-dom';
 import { 
@@ -46,13 +47,13 @@ export default function Reports() {
 Report Name: ${report.name}
 Type: ${report.type}
 Generated On: ${report.generatedOn}
-Total Findings: ${report.totalFindings}
-Overall Risk Score: ${report.riskScore}/100
+Total Findings: ${formatCount(report.totalFindings)}
+Overall Risk Score: ${formatScore(report.riskScore)}/100
 Status: ${report.status}
 
 EXECUTIVE SUMMARY:
 Rakshak AI DevSecOps platform analyzed repository source code, dependencies, and container environments.
-Total ${report.totalFindings} findings detected (${crit} Critical, ${high} High, ${med} Medium, ${low} Low).
+Total ${formatCount(report.totalFindings)} findings detected (${formatCount(crit)} Critical, ${formatCount(high)} High, ${formatCount(med)} Medium, ${formatCount(low)} Low).
 
 TOP IDENTIFIED VULNERABILITIES:
 ${findingsListStr || 'No active vulnerabilities recorded.'}
@@ -167,7 +168,7 @@ RECOMMENDED REMEDIATION:
 
                       {/* Risk Score */}
                       <td className="px-5 py-4 font-extrabold text-warning">
-                        {report.riskScore}/100
+                        {formatScore(report.riskScore)}/100
                       </td>
 
                       {/* Status */}
@@ -235,11 +236,11 @@ RECOMMENDED REMEDIATION:
               <div className="grid grid-cols-3 gap-3 p-3 rounded-xl bg-[#090014] border border-[#2A1240] text-center">
                 <div>
                   <span className="text-[10px] text-textSecondary uppercase">Total Findings</span>
-                  <span className="text-base font-black text-white block mt-0.5">{viewingReport.totalFindings}</span>
+                  <span className="text-base font-black text-white block mt-0.5">{formatCount(viewingReport.totalFindings)}</span>
                 </div>
                 <div>
                   <span className="text-[10px] text-textSecondary uppercase">Risk Score</span>
-                  <span className="text-base font-black text-warning block mt-0.5">{viewingReport.riskScore}/100</span>
+                  <span className="text-base font-black text-warning block mt-0.5">{formatScore(viewingReport.riskScore)}/100</span>
                 </div>
                 <div>
                   <span className="text-[10px] text-textSecondary uppercase">Status</span>
@@ -250,7 +251,7 @@ RECOMMENDED REMEDIATION:
               <div className="p-4 rounded-xl bg-[#090014]/60 border border-[#2A1240] space-y-2">
                 <span className="font-bold text-white block uppercase tracking-wider text-[10px]">Executive Audit Findings</span>
                 <p className="text-textSecondary leading-relaxed">
-                  {`Repository security scan completed with ${viewingReport.totalFindings} security findings tracked across application branches. Overall security posture is recorded at a risk index of ${viewingReport.riskScore}/100.`}
+                  {`Repository security scan completed with ${formatCount(viewingReport.totalFindings)} security findings tracked across application branches. Overall security posture is recorded at a risk index of ${formatScore(viewingReport.riskScore)}/100.`}
                 </p>
               </div>
 

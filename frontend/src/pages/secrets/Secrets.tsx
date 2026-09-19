@@ -1,3 +1,4 @@
+import { formatCount } from '@/utils/formatters';
 import { useState } from 'react';
 import { 
   Key, 
@@ -49,7 +50,7 @@ export default function Secrets() {
           <h1 className="text-3xl font-extrabold tracking-tight text-foreground flex items-center gap-3">
             <Key className="text-warning" size={28} />
             <span>Secrets Detection (Gitleaks)</span>
-            <Badge className="bg-danger/20 text-danger border-danger/40">{activeCount} Active Exposed Secrets</Badge>
+            <Badge className="bg-danger/20 text-danger border-danger/40">{formatCount(activeCount)} Active Exposed Secrets</Badge>
           </h1>
           <p className="text-sm text-textSecondary mt-1">
             Real-time regex & entropy analysis scanning for API keys, passwords, and private tokens.

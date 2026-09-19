@@ -1,3 +1,4 @@
+import { formatScore } from '@/utils/formatters';
 import { useState } from 'react';
 import {
   BrainCircuit,
@@ -86,7 +87,7 @@ export default function AIAnalysisHistory() {
 
                       {/* Risk Score */}
                       <td className="px-5 py-4 whitespace-nowrap">
-                        <span className="font-black text-warning text-sm">{item.riskScore}/100</span>
+                        <span className="font-black text-warning text-sm">{formatScore(item.riskScore)}/100</span>
                       </td>
 
                       {/* AI Model */}
@@ -156,7 +157,7 @@ export default function AIAnalysisHistory() {
                   </div>
                   <div>
                     <span className="text-[10px] text-textSecondary uppercase">Risk Score</span>
-                    <span className="text-sm font-black text-warning block mt-0.5">{selectedRecord.riskScore}/100</span>
+                    <span className="text-sm font-black text-warning block mt-0.5">{formatScore(selectedRecord.riskScore)}/100</span>
                   </div>
                   <div>
                     <span className="text-[10px] text-textSecondary uppercase">AI Model</span>

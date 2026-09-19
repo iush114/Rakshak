@@ -1,3 +1,4 @@
+import { formatScore, formatCount, formatPercentage } from '@/utils/formatters';
 import { useState, useMemo } from 'react';
 import {
   Search,
@@ -143,7 +144,7 @@ export default function Findings() {
               Vulnerability Findings
             </h1>
             <Badge variant="default" className="text-xs bg-rakshak-gradient text-white">
-              {filteredFindings.length} Items
+              {formatCount(filteredFindings.length)} Items
             </Badge>
             {backendOnline && (
               <Badge className="bg-emerald-500/15 text-emerald-300 border-emerald-500/30 text-xs px-2.5 py-0.5">
@@ -337,7 +338,7 @@ export default function Findings() {
                       {/* Risk Score */}
                       <td className="px-4 py-3.5">
                         <div className="flex items-center gap-2">
-                          <span className="font-extrabold text-white">{finding.riskScore}/100</span>
+                          <span className="font-extrabold text-white">{formatScore(finding.riskScore)}/100</span>
                           <div className="w-12 h-1.5 bg-border rounded-full overflow-hidden hidden sm:block">
                             <div
                               className={`h-full rounded-full ${finding.riskScore > 80 ? 'bg-danger' : finding.riskScore > 50 ? 'bg-warning' : 'bg-neonPurple'}`}
@@ -460,13 +461,13 @@ export default function Findings() {
 
                   <div className="p-3 rounded-xl bg-[#090014] border border-[#2A1240] text-center">
                     <span className="text-[10px] text-textSecondary uppercase font-semibold block">Risk Score</span>
-                    <span className="text-base font-black text-warning mt-1 block">{selectedFinding.riskScore}/100</span>
+                    <span className="text-base font-black text-warning mt-1 block">{formatScore(selectedFinding.riskScore)}/100</span>
                   </div>
 
                   <div className="p-3 rounded-xl bg-[#090014] border border-[#2A1240] text-center">
                     <span className="text-[10px] text-textSecondary uppercase font-semibold block">Exploitability</span>
                     <span className="text-xs font-mono font-bold text-neonPurple mt-1.5 block">
-                      {selectedFinding.exploitability ? `${Math.round(parseFloat(selectedFinding.exploitability) * 100)}%` : 'N/A'}
+                      {selectedFinding.exploitability ? formatPercentage(parseFloat(selectedFinding.exploitability) * 100) : 'N/A'}
                     </span>
                   </div>
                 </div>

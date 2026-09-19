@@ -1,3 +1,4 @@
+import { formatScore, formatCount, formatDuration } from '@/utils/formatters';
 import { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -141,8 +142,7 @@ export default function RepositoryScan() {
         container_image: scanOptions.containerScanning ? containerImage.trim() : null,
       });
 
-      const elapsedSec = ((performance.now() - startTime) / 1000).toFixed(1);
-      const durationStr = `${elapsedSec}s`;
+      const durationStr = formatDuration((performance.now() - startTime) / 1000, 2);
       setScanDuration(durationStr);
       setLastScanResult(response);
       setScanCompleted(true);
@@ -207,7 +207,7 @@ export default function RepositoryScan() {
             className="flex items-center gap-2 text-xs border-border/60 hover:border-pinkAccent"
           >
             <ShieldAlert size={15} className="text-pinkAccent" />
-            <span>View All Findings ({summary?.total_findings ?? findings.length})</span>
+            <span>View All Findings ({formatCount(summary?.total_findings ?? findings.length)})</span>
           </Button>
 
           <Button
@@ -839,7 +839,7 @@ export default function RepositoryScan() {
                   <span>Security Vulnerabilities Breakdown</span>
                 </h4>
                 <Badge variant="critical" className="font-mono text-xs px-3 py-0.5">
-                  {lastScanResult.total_findings} Total Findings
+                  {formatCount(lastScanResult.total_findings)} Total Findings
                 </Badge>
               </div>
 
@@ -847,7 +847,7 @@ export default function RepositoryScan() {
                 <div className="p-3.5 rounded-xl bg-danger/10 border border-danger/30">
                   <span className="text-[10px] font-bold uppercase text-danger block">Critical</span>
                   <span className="text-2xl font-black text-danger font-mono mt-0.5 block">
-                    {lastScanResult.critical}
+                    {formatCount(lastScanResult.critical)}
                   </span>
                   <span className="text-[10px] text-textSecondary mt-0.5 block">Immediate Action</span>
                 </div>
@@ -855,7 +855,7 @@ export default function RepositoryScan() {
                 <div className="p-3.5 rounded-xl bg-pinkAccent/10 border border-pinkAccent/30">
                   <span className="text-[10px] font-bold uppercase text-pinkAccent block">High</span>
                   <span className="text-2xl font-black text-pinkAccent font-mono mt-0.5 block">
-                    {lastScanResult.high}
+                    {formatCount(lastScanResult.high)}
                   </span>
                   <span className="text-[10px] text-textSecondary mt-0.5 block">High Priority</span>
                 </div>
@@ -863,7 +863,7 @@ export default function RepositoryScan() {
                 <div className="p-3.5 rounded-xl bg-warning/10 border border-warning/30">
                   <span className="text-[10px] font-bold uppercase text-warning block">Medium</span>
                   <span className="text-2xl font-black text-warning font-mono mt-0.5 block">
-                    {lastScanResult.medium}
+                    {formatCount(lastScanResult.medium)}
                   </span>
                   <span className="text-[10px] text-textSecondary mt-0.5 block">Medium Risk</span>
                 </div>
@@ -871,7 +871,7 @@ export default function RepositoryScan() {
                 <div className="p-3.5 rounded-xl bg-neonPurple/10 border border-neonPurple/30">
                   <span className="text-[10px] font-bold uppercase text-neonPurple block">Low</span>
                   <span className="text-2xl font-black text-neonPurple font-mono mt-0.5 block">
-                    {lastScanResult.low}
+                    {formatCount(lastScanResult.low)}
                   </span>
                   <span className="text-[10px] text-textSecondary mt-0.5 block">Low Impact</span>
                 </div>
@@ -886,7 +886,7 @@ export default function RepositoryScan() {
                 </span>
                 <div className="mt-3 flex items-center justify-center gap-2">
                   <span className="text-4xl font-black text-warning font-mono">
-                    {lastScanResult.overall_risk} / 100
+                    {formatScore(lastScanResult.overall_risk)} / 100
                   </span>
                 </div>
                 <div className="mt-2">

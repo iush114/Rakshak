@@ -1,3 +1,4 @@
+import { formatScore, formatCount } from '@/utils/formatters';
 import { useState } from 'react';
 import { motion } from 'framer-motion';
 import {
@@ -211,7 +212,7 @@ export default function Dashboard() {
         {[
           {
             title: 'Security Health Score',
-            value: `${healthScore}/100`,
+            value: `${formatScore(healthScore)}/100`,
             subtitle: healthScore >= 80 ? 'GRADE A (EXCELLENT)' : healthScore >= 60 ? 'GRADE B (STABLE)' : 'GRADE C (ATTENTION NEEDED)',
             change: '+6% this week',
             isUp: true,
@@ -223,7 +224,7 @@ export default function Dashboard() {
           },
           {
             title: 'Total Findings',
-            value: totalFindingsCount.toString(),
+            value: formatCount(totalFindingsCount),
             subtitle: `${prioritizedCount} Prioritized`,
             change: `${totalFindingsCount} Detected`,
             isUp: totalFindingsCount === 0,
@@ -235,7 +236,7 @@ export default function Dashboard() {
           },
           {
             title: 'Critical CVEs',
-            value: criticalCount.toString(),
+            value: formatCount(criticalCount),
             subtitle: 'Immediate Action Required',
             change: criticalCount > 0 ? 'Urgent Patch' : 'Clear',
             isUp: criticalCount === 0,
@@ -247,7 +248,7 @@ export default function Dashboard() {
           },
           {
             title: 'Exposed Secrets',
-            value: secretFindingsCount.toString(),
+            value: formatCount(secretFindingsCount),
             subtitle: 'Gitleaks AST Flagged',
             change: secretFindingsCount > 0 ? 'Active Alerts' : 'Clean',
             isUp: secretFindingsCount === 0,
@@ -360,6 +361,7 @@ export default function Dashboard() {
                   <YAxis stroke="#C4B5FD" opacity={0.4} fontSize={11} tickLine={false} />
                   <RechartsTooltip
                     contentStyle={{ backgroundColor: '#12051F', borderColor: '#2A1240', borderRadius: '12px', color: '#FFF', fontSize: '12px' }}
+                    formatter={(value: any, name: any) => [formatCount(value), name]}
                   />
                   <Area type="monotone" dataKey="findings" stroke="#A855F7" strokeWidth={2.5} fillOpacity={1} fill="url(#findingsGrad)" name="Active Findings" />
                   <Area type="monotone" dataKey="resolved" stroke="#10B981" strokeWidth={2} fillOpacity={1} fill="url(#resolvedGrad)" name="Resolved" />
@@ -410,11 +412,12 @@ export default function Dashboard() {
                   </Pie>
                   <RechartsTooltip
                     contentStyle={{ backgroundColor: '#12051F', borderColor: '#2A1240', borderRadius: '12px', color: '#FFF', fontSize: '12px' }}
+                    formatter={(value: any, name: any) => [formatCount(value), name]}
                   />
                 </PieChart>
               </ResponsiveContainer>
               <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-                <span className="text-3xl font-black text-white">{totalFindingsCount}</span>
+                <span className="text-3xl font-black text-white">{formatCount(totalFindingsCount)}</span>
                 <span className="text-[10px] text-[#C4B5FD]/70 uppercase font-bold tracking-widest">Total Threats</span>
               </div>
             </div>
@@ -427,7 +430,7 @@ export default function Dashboard() {
                     <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: item.color }} />
                     <span className="text-zinc-300 font-medium">{item.name}</span>
                   </div>
-                  <span className="font-mono font-bold text-white">{item.value}</span>
+                  <span className="font-mono font-bold text-white">{formatCount(item.value)}</span>
                 </div>
               ))}
             </div>
@@ -503,7 +506,7 @@ export default function Dashboard() {
                           {finding.package}
                         </td>
                         <td className="px-4 py-3.5">
-                          <span className="font-extrabold text-white">{finding.riskScore}/100</span>
+                          <span className="font-extrabold text-white">{formatScore(finding.riskScore)}/100</span>
                         </td>
                         <td className="px-4 py-3.5 text-right">
                           <Button
@@ -546,11 +549,11 @@ export default function Dashboard() {
             <div className="p-4 rounded-2xl bg-[#090014]/80 border border-[#2A1240] text-xs leading-relaxed text-zinc-300 space-y-2.5">
               <div className="flex items-center gap-2 text-amber-300 font-bold">
                 <Zap size={15} />
-                <span>{criticalCount} Critical & {highCount} High Threats Identified</span>
+                <span>{formatCount(criticalCount)} Critical & {formatCount(highCount)} High Threats Identified</span>
               </div>
               <p className="text-zinc-400">
                 {findings.length > 0
-                  ? `Automated DevSecOps scan identified ${totalFindingsCount} security findings across code, dependencies, and secrets with autonomous risk scoring.`
+                  ? `Automated DevSecOps scan identified ${formatCount(totalFindingsCount)} security findings across code, dependencies, and secrets with autonomous risk scoring.`
                   : 'No active vulnerabilities detected in the monitored repository branches.'}
               </p>
               <div className="pt-2 border-t border-[#2A1240] flex items-center justify-between text-[11px] text-emerald-400">
@@ -633,8 +636,8 @@ export default function Dashboard() {
                 </div>
 
                 <div className="flex items-center justify-between text-xs pt-2 border-t border-[#2A1240] text-[#C4B5FD]/70">
-                  <span>{repo.language} ({repo.filesCount} files)</span>
-                  <span className="font-mono text-emerald-400 font-bold">{repo.dependenciesCount} deps</span>
+                  <span>{repo.language} ({formatCount(repo.filesCount)} files)</span>
+                  <span className="font-mono text-emerald-400 font-bold">{formatCount(repo.dependenciesCount)} deps</span>
                 </div>
               </div>
             ))}
