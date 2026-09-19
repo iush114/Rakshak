@@ -62,7 +62,7 @@ jobs:
       # 5. Run Database Migrations
       - name: Run Alembic migrations
         env:
-          DATABASE_URL: postgresql://rakshak:rakshak_test_password@localhost:5432/rakshak_test
+          DATABASE_URL: postgresql+psycopg://rakshak:rakshak_test_password@localhost:5432/rakshak_test
         run: |
           python -m alembic upgrade head
 
@@ -108,7 +108,7 @@ jobs:
       # 10. Validate Rakshak application startup & readiness
       - name: Validate Rakshak application startup & readiness
         env:
-          DATABASE_URL: postgresql://rakshak:rakshak_test_password@localhost:5432/rakshak_test
+          DATABASE_URL: postgresql+psycopg://rakshak:rakshak_test_password@localhost:5432/rakshak_test
           SESSION_SECRET: ci-test-session-secret-for-rakshak-pipeline-validation
         run: |
           python -c "from fastapi.testclient import TestClient; from app.main import app; client = TestClient(app); h = client.get('/health'); assert h.status_code == 200; r = client.get('/ready'); assert r.status_code == 200; print('[OK] Application health and readiness verified.')"
