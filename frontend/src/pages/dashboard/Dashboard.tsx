@@ -13,6 +13,7 @@ import {
   FileText,
   ShieldCheck,
   AlertTriangle,
+  Info,
   GitBranch,
   ChevronRight,
   Cpu
@@ -44,6 +45,7 @@ export default function Dashboard() {
     isLoading,
     backendOnline,
     backendError,
+    currentUser,
     refreshData,
     secrets,
     repositories,
@@ -90,7 +92,7 @@ export default function Dashboard() {
   return (
     <div className="space-y-8 pb-16 font-sans">
 
-      {/* Backend Offline / Error Notice */}
+      {/* Backend Offline / Connection Error Notice */}
       {!backendOnline && backendError && (
         <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs text-amber-200 animate-in fade-in">
           <div className="flex items-center gap-2">
@@ -110,6 +112,26 @@ export default function Dashboard() {
         </div>
       )}
 
+      {/* Unauthenticated / Sign-in Required Notice */}
+      {backendOnline && !currentUser && backendError && (
+        <div className="p-4 rounded-2xl bg-purple-500/10 border border-purple-500/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs text-purple-200 animate-in fade-in">
+          <div className="flex items-center gap-2">
+            <Info className="text-neonPurple shrink-0" size={18} />
+            <span>
+              <strong>Authentication Notice:</strong> {backendError}
+            </span>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => navigate('/login')}
+            className="border-purple-500/40 text-purple-300 hover:bg-purple-500/20 text-xs shrink-0"
+          >
+            <span>Sign In</span>
+          </Button>
+        </div>
+      )}
+
       {/* ========================================================= */}
       {/* 1. TOP BANNER / WELCOME & REPO CONTEXT */}
       {/* ========================================================= */}
@@ -123,10 +145,17 @@ export default function Dashboard() {
               <span>Security Command Center</span>
             </h1>
             {backendOnline ? (
-              <Badge className="bg-emerald-500/15 text-emerald-300 border-emerald-500/30 text-xs px-2.5 py-0.5">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 mr-1.5 animate-pulse" />
-                FastAPI Connected (127.0.0.1:8000)
-              </Badge>
+              currentUser ? (
+                <Badge className="bg-emerald-500/15 text-emerald-300 border-emerald-500/30 text-xs px-2.5 py-0.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 mr-1.5 animate-pulse" />
+                  FastAPI Connected (127.0.0.1:8000)
+                </Badge>
+              ) : (
+                <Badge className="bg-purple-500/15 text-purple-300 border-purple-500/30 text-xs px-2.5 py-0.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-purple-400 mr-1.5 animate-pulse" />
+                  FastAPI Online (Auth Required)
+                </Badge>
+              )
             ) : (
               <Badge className="bg-amber-500/15 text-amber-300 border-amber-500/30 text-xs px-2.5 py-0.5">
                 <span className="w-1.5 h-1.5 rounded-full bg-amber-400 mr-1.5 animate-pulse" />
@@ -163,7 +192,7 @@ export default function Dashboard() {
                 <span>{selectedGitHubRepo.owner}/{selectedGitHubRepo.name}</span>
                 <span className="text-[10px] opacity-70">({selectedGitHubRepo.default_branch || 'main'})</span>
               </button>
-            ) : (
+            ) : repositories.length > 0 ? (
               repositories.slice(0, 3).map((repo) => (
                 <button
                   key={repo.id}
@@ -179,10 +208,17 @@ export default function Dashboard() {
                   <span className="text-[10px] opacity-70">({repo.branch})</span>
                 </button>
               ))
+            ) : (
+              <button
+                onClick={() => navigate('/repositories')}
+                className="px-3 py-1 rounded-xl text-xs font-medium text-zinc-400 bg-[#090014]/70 border border-[#2A1240] hover:border-[#A855F7]/40 hover:text-white transition-all flex items-center gap-1.5 cursor-pointer"
+              >
+                <span>Connect GitHub to monitor repositories</span>
+                <ChevronRight size={12} />
+              </button>
             )}
           </div>
         </div>
-
         {/* Header Action Buttons */}
         <div className="flex flex-wrap items-center gap-3 z-10">
           <Button
@@ -612,36 +648,57 @@ export default function Dashboard() {
         </CardHeader>
 
         <CardContent className="pt-4">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {repositories.map((repo) => (
-              <div
-                key={repo.id}
-                onClick={() => { selectRepository(repo.id); navigate('/repositories'); }}
-                className="p-4 rounded-2xl bg-[#090014]/80 border border-[#2A1240] hover:border-[#A855F7]/60 hover:shadow-[0_0_20px_rgba(168,85,247,0.2)] transition-all cursor-pointer flex flex-col justify-between space-y-3 group"
-              >
-                <div className="flex items-start justify-between">
-                  <div>
-                    <h4 className="text-sm font-bold text-white group-hover:text-[#EC4899] transition-colors flex items-center gap-1.5">
-                      <GithubIcon size={14} className="text-zinc-400" />
-                      <span>{repo.name}</span>
-                    </h4>
-                    <p className="text-[11px] text-zinc-400 flex items-center gap-1 mt-0.5 font-mono">
-                      <GitBranch size={11} className="text-[#A855F7]" />
-                      <span>{repo.branch}</span>
-                    </p>
+          {repositories.length > 0 ? (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {repositories.map((repo) => (
+                <div
+                  key={repo.id}
+                  onClick={() => { selectRepository(repo.id); navigate('/repositories'); }}
+                  className="p-4 rounded-2xl bg-[#090014]/80 border border-[#2A1240] hover:border-[#A855F7]/60 hover:shadow-[0_0_20px_rgba(168,85,247,0.2)] transition-all cursor-pointer flex flex-col justify-between space-y-3 group"
+                >
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <h4 className="text-sm font-bold text-white group-hover:text-[#EC4899] transition-colors flex items-center gap-1.5">
+                        <GithubIcon size={14} className="text-zinc-400" />
+                        <span>{repo.name}</span>
+                      </h4>
+                      <p className="text-[11px] text-zinc-400 flex items-center gap-1 mt-0.5 font-mono">
+                        <GitBranch size={11} className="text-[#A855F7]" />
+                        <span>{repo.branch}</span>
+                      </p>
+                    </div>
+                    <Badge className="bg-emerald-500/10 text-emerald-400 border-emerald-500/30 text-[10px]">
+                      Active
+                    </Badge>
                   </div>
-                  <Badge className="bg-emerald-500/10 text-emerald-400 border-emerald-500/30 text-[10px]">
-                    Active
-                  </Badge>
-                </div>
 
-                <div className="flex items-center justify-between text-xs pt-2 border-t border-[#2A1240] text-[#C4B5FD]/70">
-                  <span>{repo.language} ({formatCount(repo.filesCount)} files)</span>
-                  <span className="font-mono text-emerald-400 font-bold">{formatCount(repo.dependenciesCount)} deps</span>
+                  <div className="flex items-center justify-between text-xs pt-2 border-t border-[#2A1240] text-[#C4B5FD]/70">
+                    <span>{repo.language} ({formatCount(repo.filesCount)} files)</span>
+                    <span className="font-mono text-emerald-400 font-bold">{formatCount(repo.dependenciesCount)} deps</span>
+                  </div>
                 </div>
+              ))}
+            </div>
+          ) : (
+            <div className="py-10 px-4 text-center rounded-2xl bg-[#090014]/40 border border-dashed border-[#2A1240] flex flex-col items-center justify-center space-y-3">
+              <div className="w-12 h-12 rounded-full bg-[#A855F7]/10 flex items-center justify-center text-[#A855F7]">
+                <GithubIcon size={24} />
               </div>
-            ))}
-          </div>
+              <div className="space-y-1">
+                <p className="text-sm font-bold text-white">No monitored repositories</p>
+                <p className="text-xs text-[#C4B5FD]/70 max-w-sm">
+                  Connect GitHub to monitor repositories, run automated DevSecOps scans, and detect vulnerabilities.
+                </p>
+              </div>
+              <Button
+                size="sm"
+                onClick={() => navigate('/repositories')}
+                className="bg-rakshak-gradient text-white text-xs font-bold px-4 py-2 rounded-xl shadow-[0_0_15px_rgba(168,85,247,0.3)] hover:scale-105 transition-all cursor-pointer"
+              >
+                <span>Connect GitHub</span>
+              </Button>
+            </div>
+          )}
         </CardContent>
       </Card>
 

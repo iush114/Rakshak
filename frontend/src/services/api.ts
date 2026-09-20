@@ -1,7 +1,7 @@
 import { type Finding } from '@/data/findings';
 
 // Normalize FastAPI Backend URL configuration
-export const RAW_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000';
+export const RAW_URL = import.meta.env.VITE_API_BASE_URL || (typeof window !== 'undefined' && window.location.hostname === 'localhost' ? 'http://localhost:8000' : 'http://127.0.0.1:8000');
 export const CLEAN_BASE = RAW_URL.replace(/\/api\/?$/, '').replace(/\/+$/, '');
 export const API_BASE_URL = `${CLEAN_BASE}/api`;
 export const HEALTH_URL = `${CLEAN_BASE}/health`;
@@ -108,6 +108,19 @@ export function createApiError(message: string, status?: number): Error & { stat
 }
 
 // GitHub OAuth & Repository Interfaces
+export interface AuthUser {
+  id: number;
+  login?: string | null;
+  name?: string | null;
+  display_name?: string | null;
+  avatar_url?: string | null;
+  html_url?: string | null;
+  email?: string | null;
+  github_user_id?: number | null;
+  github_login?: string | null;
+  is_verified?: boolean;
+}
+
 export interface GitHubUser {
   id: number;
   login: string;
@@ -266,13 +279,20 @@ export function mapBackendFindingToFrontend(bf: BackendFinding, index: number = 
 /**
  * Fetch current authenticated user info from GET /api/auth/me
  */
-export async function getAuthMe(): Promise<{ authenticated: boolean; user: GitHubUser | null }> {
+export interface AuthMeResponse {
+  authenticated: boolean;
+  user: AuthUser | null;
+  github_connected: boolean;
+  github_user: GitHubUser | null;
+}
+
+export async function getAuthMe(): Promise<AuthMeResponse> {
   const res = await fetch(`${API_BASE_URL}/auth/me`, {
     headers: { 'Accept': 'application/json' },
     credentials: 'include',
   });
   if (!res.ok) {
-    throw new Error(`Failed to check authentication: HTTP ${res.status}`);
+    throw createApiError(`Failed to check authentication: HTTP ${res.status}`, res.status);
   }
   return res.json();
 }
@@ -280,6 +300,22 @@ export async function getAuthMe(): Promise<{ authenticated: boolean; user: GitHu
 /**
  * Log out GitHub session via POST /api/auth/logout
  */
+
+/**
+ * Disconnect GitHub account via POST /api/auth/github/disconnect
+ */
+export async function disconnectGitHub(): Promise<{ success: boolean; message: string }> {
+  const res = await fetch(`${API_BASE_URL}/auth/github/disconnect`, {
+    method: 'POST',
+    headers: { 'Accept': 'application/json' },
+    credentials: 'include',
+  });
+  if (!res.ok) {
+    throw createApiError(`Failed to disconnect GitHub: HTTP ${res.status}`, res.status);
+  }
+  return res.json();
+}
+
 export async function logoutAuth(): Promise<{ success: boolean; message: string }> {
   const res = await fetch(`${API_BASE_URL}/auth/logout`, {
     method: 'POST',
@@ -547,7 +583,7 @@ export async function analyzeFindingWithAI(vulnerabilityId: string): Promise<AIA
  */
 export async function performScan(req: ApiScanRequest): Promise<ApiScanResponse & { mappedFindings: Finding[] }> {
   const payload = {
-    target_path: req.target_path || 'test-project',
+    target_path: req.target_path || '.',
     code_scanning: Boolean(req.code_scanning),
     dependency_scanning: Boolean(req.dependency_scanning),
     secret_detection: Boolean(req.secret_detection),

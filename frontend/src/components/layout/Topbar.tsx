@@ -19,6 +19,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { useSecurity } from '@/context/SecurityContext';
+import { API_BASE_URL } from '@/services/api';
 import { useNavigate } from 'react-router-dom';
 import {
   getNotifications,
@@ -103,7 +104,7 @@ function getNotificationIcon(type: string, severity?: string | null) {
 
 export default function Topbar({ onToggleMobileMenu, isSidebarCollapsed = false }: TopbarProps) {
   const navigate = useNavigate();
-  const { selectedGitHubRepo, selectedRepo, isGithubConnected, currentUser } = useSecurity();
+  const { selectedGitHubRepo, selectedRepo, isGithubConnected, currentUser, gitHubUser } = useSecurity();
   const [searchTerm, setSearchTerm] = useState('');
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
@@ -139,19 +140,30 @@ export default function Topbar({ onToggleMobileMenu, isSidebarCollapsed = false 
   }, []);
 
   const fetchNotificationData = useCallback(async () => {
+    if (!currentUser && !isGithubConnected) {
+      setNotifications([]);
+      return;
+    }
     try {
       setIsLoading(true);
       const data = await getNotifications(30);
       setNotifications(data.notifications || []);
-    } catch {
-      // Graceful degrade if unauthenticated or server unavailable
+    } catch (err: any) {
+      if (err?.status === 401) {
+        setNotifications([]);
+      }
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [currentUser, isGithubConnected]);
 
-  // Initial fetch and 30-second polling interval
+  // Initial fetch and 30-second polling interval (enabled ONLY for authenticated sessions)
   useEffect(() => {
+    if (!currentUser && !isGithubConnected) {
+      setNotifications([]);
+      return;
+    }
+
     fetchNotificationData();
 
     const interval = setInterval(() => {
@@ -159,14 +171,14 @@ export default function Topbar({ onToggleMobileMenu, isSidebarCollapsed = false 
     }, 30000);
 
     return () => clearInterval(interval);
-  }, [fetchNotificationData]);
+  }, [currentUser, isGithubConnected, fetchNotificationData]);
 
   // Refresh when notification popover opens
   useEffect(() => {
-    if (isNotificationsOpen) {
+    if (isNotificationsOpen && (currentUser || isGithubConnected)) {
       fetchNotificationData();
     }
-  }, [isNotificationsOpen, fetchNotificationData]);
+  }, [isNotificationsOpen, currentUser, isGithubConnected, fetchNotificationData]);
 
   // Close notifications dropdown on click outside or Escape
   useEffect(() => {
@@ -231,7 +243,7 @@ export default function Topbar({ onToggleMobileMenu, isSidebarCollapsed = false 
 
   const activeRepoName = selectedGitHubRepo
     ? `${selectedGitHubRepo.owner}/${selectedGitHubRepo.name}`
-    : selectedRepo.name;
+    : (selectedRepo?.name || 'No Repository');
 
   const visibleNotifications = filterNotifications(notifications);
   const visibleUnreadCount = visibleNotifications.filter((n) => !n.is_read).length;
@@ -264,7 +276,7 @@ export default function Topbar({ onToggleMobileMenu, isSidebarCollapsed = false 
       <div className="flex items-center gap-3 shrink-0">
 
         {/* Connected Repository Pill */}
-        {isGithubConnected && (
+        {isGithubConnected && (selectedGitHubRepo || selectedRepo) && (
           <div
             onClick={() => navigate('/repositories')}
             className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-xl bg-background border border-border/80 text-xs hover:border-neonPurple/50 transition-all cursor-pointer"
@@ -407,20 +419,39 @@ export default function Topbar({ onToggleMobileMenu, isSidebarCollapsed = false 
           )}
         </div>
 
+        {/* Quick Connect GitHub action if email logged in but GitHub not linked */}
+        {!isGithubConnected && currentUser && (
+          <Button
+            onClick={() => window.location.href = `${API_BASE_URL}/auth/github`}
+            variant="outline"
+            size="sm"
+            className="hidden md:flex items-center gap-1.5 h-8 text-xs border-[#2A1240] hover:border-[#A855F7]/60 text-[#C4B5FD] hover:text-white bg-[#12051F]/80 rounded-xl cursor-pointer"
+          >
+            <Github size={13} className="text-[#A855F7]" />
+            <span>Connect GitHub</span>
+          </Button>
+        )}
+
         <div className="flex items-center gap-2.5 pl-3 border-l border-border/50">
           <div className="text-right hidden lg:block">
-            <p className="text-xs font-bold text-foreground font-mono">
-              {currentUser?.login || 'DevSecOps User'}
+            <p className="text-xs font-bold text-foreground font-mono truncate max-w-[150px]">
+              {gitHubUser?.name ||
+                currentUser?.name ||
+                currentUser?.display_name ||
+                currentUser?.login ||
+                (currentUser?.email
+                  ? currentUser.email.split('@')[0].replace(/[._\-+]+/g, ' ').split(' ').map(w => w ? w.charAt(0).toUpperCase() + w.slice(1) : '').filter(Boolean).join(' ')
+                  : 'User')}
             </p>
-            <p className="text-[10px] text-textSecondary">
-              {currentUser ? 'GitHub Authenticated' : 'Rakshak Security'}
+            <p className="text-[10px] text-textSecondary font-mono">
+              {isGithubConnected ? `@${gitHubUser?.login || currentUser?.github_login || 'connected'}` : 'Email Verified'}
             </p>
           </div>
 
-          {currentUser?.avatar_url ? (
+          {(gitHubUser?.avatar_url || currentUser?.avatar_url) ? (
             <img
-              src={currentUser.avatar_url}
-              alt={currentUser.login}
+              src={gitHubUser?.avatar_url || currentUser?.avatar_url || ''}
+              alt={gitHubUser?.login || currentUser?.login || 'User avatar'}
               className="w-8 h-8 rounded-full border border-neonPurple shadow-sm"
             />
           ) : (
