@@ -1,5 +1,5 @@
 import { formatScore, formatCount } from '@/utils/formatters';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { 
   FileText, 
@@ -8,9 +8,11 @@ import {
   CheckCircle2, 
   Sparkles,
   X,
-  FileDown,
   Trash2,
-  Eye
+  Eye,
+  ShieldCheck,
+  ShieldAlert,
+  Activity
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -25,13 +27,34 @@ export default function Reports() {
 
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [reportName, setReportName] = useState('Security Report — May 19, 2025');
+  const [reportName, setReportName] = useState('Security Report - May 19, 2025');
   const [reportType, setReportType] = useState('Full Report');
   const [includeAI, setIncludeAI] = useState(true);
   const [includeSecrets, setIncludeSecrets] = useState(true);
 
   // View Report Modal State
   const [viewingReport, setViewingReport] = useState<SecurityReport | null>(null);
+
+  // Body Scroll Locking & Escape Key listener for Modals
+  useEffect(() => {
+    if (isModalOpen || viewingReport) {
+      const originalOverflow = document.body.style.overflow;
+      document.body.style.overflow = 'hidden';
+
+      const handleKeyDown = (e: KeyboardEvent) => {
+        if (e.key === 'Escape') {
+          setIsModalOpen(false);
+          setViewingReport(null);
+        }
+      };
+      window.addEventListener('keydown', handleKeyDown);
+
+      return () => {
+        document.body.style.overflow = originalOverflow;
+        window.removeEventListener('keydown', handleKeyDown);
+      };
+    }
+  }, [isModalOpen, viewingReport]);
 
   // Download Report
   const handleDownload = (report: SecurityReport) => {
@@ -90,40 +113,92 @@ RECOMMENDED REMEDIATION:
   return (
     <div className="space-y-6 pb-12">
       
-      {/* HEADER */}
+      {/* 1. STANDARDIZED PAGE HEADER */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-border/50 pb-5">
         <div>
-          <h1 className="text-3xl font-extrabold tracking-tight text-foreground flex items-center gap-3">
+          <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-foreground flex items-center gap-3">
             <FileText className="text-neonPurple" size={28} />
-            <span>Reports</span>
-            <Badge variant="default" className="text-xs bg-rakshak-gradient text-white">{reports.length} Reports</Badge>
+            <span>Security Reports</span>
+            <Badge variant="default" className="text-xs bg-rakshak-gradient text-white">
+              {reports.length} Reports
+            </Badge>
           </h1>
           <p className="text-sm text-textSecondary mt-1">
-            Generate, view, and download executive security reports & DevSecOps compliance audits.
+            Generate, view, and export compliance and DevSecOps security posture audit documentation.
           </p>
         </div>
 
         <Button 
           variant="gradient" 
           onClick={() => setIsModalOpen(true)}
-          className="flex items-center gap-2 text-xs cursor-pointer shadow-lg shrink-0"
+          className="flex items-center gap-2 text-xs shrink-0 cursor-pointer"
         >
           <Plus size={16} />
           <span>Generate New Report</span>
         </Button>
       </div>
 
-      {/* REPORTS TABLE */}
+      {/* 2. EXECUTIVE SUMMARY KPI CARDS */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <Card className="border-border/80 bg-card/60">
+          <CardContent className="p-4 space-y-1">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-textSecondary">Generated Reports</span>
+              <FileText size={15} className="text-neonPurple" />
+            </div>
+            <span className="text-2xl sm:text-3xl font-black text-white block">{formatCount(reports.length)}</span>
+            <p className="text-[10px] text-textSecondary">Audit documentation archives</p>
+          </CardContent>
+        </Card>
+
+        <Card className="border-border/80 bg-card/60">
+          <CardContent className="p-4 space-y-1">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-textSecondary">Monitored Findings</span>
+              <ShieldAlert size={15} className="text-pinkAccent" />
+            </div>
+            <span className="text-2xl sm:text-3xl font-black text-white block">{formatCount(findings.length)}</span>
+            <p className="text-[10px] text-textSecondary">Active tracked vulnerabilities</p>
+          </CardContent>
+        </Card>
+
+        <Card className="border-border/80 bg-card/60">
+          <CardContent className="p-4 space-y-1">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-textSecondary">Average Risk Index</span>
+              <Activity size={15} className="text-warning" />
+            </div>
+            <div className="flex items-baseline gap-1">
+              <span className="text-2xl sm:text-3xl font-black text-warning">{formatScore(overallRiskScore)}</span>
+              <span className="text-xs text-textSecondary font-semibold">/100</span>
+            </div>
+            <p className="text-[10px] text-textSecondary">Overall posture score</p>
+          </CardContent>
+        </Card>
+
+        <Card className="border-border/80 bg-card/60">
+          <CardContent className="p-4 space-y-1">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-textSecondary">Report Status</span>
+              <ShieldCheck size={15} className="text-success" />
+            </div>
+            <span className="text-2xl sm:text-3xl font-black text-success block">100%</span>
+            <p className="text-[10px] text-success/80 font-medium">All reports verified</p>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* 3. REPORTS TABLE */}
       <Card>
         <CardContent className="p-0">
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs font-sans">
               <thead className="bg-[#090014] border-b border-border/80 text-textSecondary uppercase font-semibold">
                 <tr>
-                  <th className="px-5 py-3.5">Report Name</th>
+                  <th className="px-5 py-3.5">Report Title</th>
                   <th className="px-5 py-3.5">Type</th>
                   <th className="px-5 py-3.5">Generated On</th>
-                  <th className="px-5 py-3.5">Total Findings</th>
+                  <th className="px-5 py-3.5">Findings</th>
                   <th className="px-5 py-3.5">Risk Score</th>
                   <th className="px-5 py-3.5">Status</th>
                   <th className="px-5 py-3.5 text-right">Actions</th>
@@ -132,75 +207,79 @@ RECOMMENDED REMEDIATION:
               <tbody className="divide-y divide-border/40 font-sans">
                 {reports.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="px-5 py-14 text-center text-textSecondary font-sans">
+                    <td colSpan={7} className="px-5 py-14 text-center text-textSecondary">
                       <FileText size={40} className="mx-auto text-neonPurple/40 mb-3" />
-                      <p className="font-bold text-white text-sm">No reports available.</p>
-                      <p className="text-xs text-textSecondary mt-1 max-w-md mx-auto">
-                        Click &quot;Generate New Report&quot; above to create a DevSecOps executive audit report from your active scan findings.
-                      </p>
+                      <p className="font-bold text-white text-sm">No reports generated yet.</p>
+                      <p className="text-xs text-textSecondary mt-1">Click &quot;Generate New Report&quot; to compile your first security audit.</p>
                     </td>
                   </tr>
                 ) : (
                   reports.map((report) => (
                     <tr key={report.id} className="hover:bg-white/5 transition-colors">
-                      {/* Report Name */}
-                      <td className="px-5 py-4 font-bold text-white flex items-center gap-2.5">
-                        <FileDown size={18} className="text-pinkAccent shrink-0" />
-                        <span>{report.name}</span>
+                      {/* Name & Format */}
+                      <td className="px-5 py-4">
+                        <div className="flex items-center gap-3">
+                          <div className="p-2 rounded-lg bg-neonPurple/10 text-neonPurple border border-neonPurple/20 shrink-0">
+                            <FileText size={16} />
+                          </div>
+                          <div className="min-w-0">
+                            <span className="font-semibold text-white block truncate">{report.name}</span>
+                            <span className="text-[10px] text-textSecondary font-mono">{report.size} • {report.format}</span>
+                          </div>
+                        </div>
                       </td>
 
                       {/* Type */}
-                      <td className="px-5 py-4">
-                        <Badge variant="outline" className="text-[10px] text-neonPurple border-neonPurple/30">
-                          {report.type}
-                        </Badge>
+                      <td className="px-5 py-4 font-medium text-textSecondary whitespace-nowrap">
+                        {report.type}
                       </td>
 
-                      {/* Generated On */}
-                      <td className="px-5 py-4 font-mono text-textSecondary">
+                      {/* Date */}
+                      <td className="px-5 py-4 text-textSecondary whitespace-nowrap font-mono">
                         {report.generatedOn}
                       </td>
 
-                      {/* Total Findings */}
-                      <td className="px-5 py-4 font-bold text-white">
-                        {report.totalFindings}
+                      {/* Findings */}
+                      <td className="px-5 py-4 font-mono font-bold text-white whitespace-nowrap">
+                        {formatCount(report.totalFindings)}
                       </td>
 
                       {/* Risk Score */}
-                      <td className="px-5 py-4 font-extrabold text-warning">
-                        {formatScore(report.riskScore)}/100
+                      <td className="px-5 py-4 whitespace-nowrap">
+                        <span className="font-mono font-black text-warning">{formatScore(report.riskScore)}/100</span>
                       </td>
 
                       {/* Status */}
-                      <td className="px-5 py-4">
-                        <Badge variant="success" className="text-[10px]">
+                      <td className="px-5 py-4 whitespace-nowrap">
+                        <Badge variant="success" className="text-[10px] uppercase font-bold">
                           {report.status}
                         </Badge>
                       </td>
 
                       {/* Actions */}
-                      <td className="px-5 py-4 text-right">
+                      <td className="px-5 py-4 text-right whitespace-nowrap">
                         <div className="flex items-center justify-end gap-2">
                           <button
                             onClick={() => setViewingReport(report)}
-                            className="px-2.5 py-1 rounded-lg bg-card border border-border text-textSecondary hover:text-white hover:border-neonPurple transition-all flex items-center gap-1 cursor-pointer"
+                            className="px-2.5 py-1 rounded-lg bg-card border border-border text-textSecondary hover:text-white hover:border-neonPurple transition-all flex items-center gap-1 cursor-pointer text-xs font-semibold"
                           >
-                            <Eye size={14} />
+                            <Eye size={13} />
                             <span>View</span>
                           </button>
 
                           <button
                             onClick={() => handleDownload(report)}
-                            className="px-2.5 py-1 rounded-lg bg-neonPurple/10 border border-neonPurple/30 text-neonPurple hover:bg-neonPurple hover:text-white transition-all flex items-center gap-1 cursor-pointer"
+                            className="px-2.5 py-1 rounded-lg bg-neonPurple/10 border border-neonPurple/30 text-neonPurple hover:bg-neonPurple hover:text-white transition-all flex items-center gap-1 cursor-pointer text-xs font-semibold"
                           >
-                            <Download size={14} />
+                            <Download size={13} />
                             <span>Download</span>
                           </button>
 
                           <button
                             onClick={() => deleteReport(report.id)}
-                            className="p-1 rounded-lg bg-card border border-border text-textSecondary hover:text-danger hover:border-danger/40 transition-all cursor-pointer"
+                            className="p-1.5 rounded-lg bg-card border border-border text-textSecondary hover:text-danger hover:border-danger/40 transition-all cursor-pointer"
                             title="Delete Report"
+                            aria-label="Delete Report"
                           >
                             <Trash2 size={14} />
                           </button>
@@ -215,32 +294,46 @@ RECOMMENDED REMEDIATION:
         </CardContent>
       </Card>
 
-      {/* VIEW REPORT MODAL */}
+      {/* 4. VIEW REPORT MODAL */}
       {viewingReport && createPortal((
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 backdrop-blur-md p-4">
-          <div className="w-full max-w-xl max-h-[calc(100vh-2rem)] overflow-y-auto bg-[#12051F] border border-[#2A1240] rounded-2xl shadow-2xl animate-in fade-in zoom-in duration-200">
-            <div className="p-6 border-b border-[#2A1240] flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <FileText className="text-neonPurple" size={24} />
-                <div>
-                  <h3 className="text-lg font-bold text-white">{viewingReport.name}</h3>
-                  <p className="text-xs text-textSecondary">{viewingReport.type} • {viewingReport.generatedOn}</p>
+        <div 
+          onClick={() => setViewingReport(null)}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md p-3 sm:p-4 overflow-hidden"
+        >
+          <div 
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-xl max-h-[calc(100vh-24px)] sm:max-h-[calc(100vh-32px)] max-h-[calc(100dvh-24px)] sm:max-h-[calc(100dvh-32px)] flex flex-col bg-[#12051F] border border-[#2A1240] rounded-2xl shadow-2xl overflow-hidden"
+          >
+            {/* Header */}
+            <div className="p-4 sm:p-6 border-b border-[#2A1240] flex items-center justify-between shrink-0 gap-3">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="p-2.5 rounded-xl bg-neonPurple/20 text-neonPurple border border-neonPurple/30 shrink-0">
+                  <FileText size={22} />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="text-base sm:text-lg font-bold text-white truncate">{viewingReport.name}</h3>
+                  <p className="text-xs text-textSecondary truncate">{viewingReport.type} • {viewingReport.generatedOn}</p>
                 </div>
               </div>
-              <button onClick={() => setViewingReport(null)} className="text-textSecondary hover:text-white">
+              <button 
+                onClick={() => setViewingReport(null)} 
+                className="p-1.5 rounded-lg text-textSecondary hover:text-white hover:bg-white/10 transition-colors shrink-0 cursor-pointer"
+                aria-label="Close modal"
+              >
                 <X size={20} />
               </button>
             </div>
 
-            <div className="p-6 space-y-4 text-xs font-sans">
+            {/* Scrollable Content */}
+            <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 text-xs font-sans">
               <div className="grid grid-cols-3 gap-3 p-3 rounded-xl bg-[#090014] border border-[#2A1240] text-center">
                 <div>
                   <span className="text-[10px] text-textSecondary uppercase">Total Findings</span>
-                  <span className="text-base font-black text-white block mt-0.5">{formatCount(viewingReport.totalFindings)}</span>
+                  <span className="text-sm sm:text-base font-black text-white block mt-0.5">{formatCount(viewingReport.totalFindings)}</span>
                 </div>
                 <div>
                   <span className="text-[10px] text-textSecondary uppercase">Risk Score</span>
-                  <span className="text-base font-black text-warning block mt-0.5">{formatScore(viewingReport.riskScore)}/100</span>
+                  <span className="text-sm sm:text-base font-black text-warning block mt-0.5">{formatScore(viewingReport.riskScore)}/100</span>
                 </div>
                 <div>
                   <span className="text-[10px] text-textSecondary uppercase">Status</span>
@@ -259,14 +352,14 @@ RECOMMENDED REMEDIATION:
                 <Button 
                   variant="outline" 
                   onClick={() => setViewingReport(null)}
-                  className="text-xs"
+                  className="text-xs cursor-pointer"
                 >
                   Close
                 </Button>
                 <Button 
                   variant="gradient"
                   onClick={() => { handleDownload(viewingReport); setViewingReport(null); }}
-                  className="text-xs flex items-center gap-1.5"
+                  className="text-xs flex items-center gap-1.5 cursor-pointer"
                 >
                   <Download size={14} />
                   <span>Download Report</span>
@@ -277,24 +370,35 @@ RECOMMENDED REMEDIATION:
         </div>
       ), document.body)}
 
-      {/* GENERATE NEW REPORT MODAL */}
+      {/* 5. GENERATE NEW REPORT MODAL */}
       {isModalOpen && createPortal((
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 backdrop-blur-md p-4">
-          <div className="w-full max-w-lg max-h-[calc(100vh-2rem)] overflow-y-auto bg-[#12051F] border border-[#2A1240] rounded-2xl shadow-2xl animate-in fade-in zoom-in duration-200">
-            <div className="p-6 border-b border-[#2A1240] flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Sparkles className="text-neonPurple" size={20} />
-                <h3 className="text-lg font-bold text-white">Generate Security Report</h3>
+        <div 
+          onClick={() => setIsModalOpen(false)}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md p-3 sm:p-4 overflow-hidden"
+        >
+          <div 
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-lg max-h-[calc(100vh-24px)] sm:max-h-[calc(100vh-32px)] max-h-[calc(100dvh-24px)] sm:max-h-[calc(100dvh-32px)] flex flex-col bg-[#12051F] border border-[#2A1240] rounded-2xl shadow-2xl overflow-hidden"
+          >
+            {/* Header */}
+            <div className="p-4 sm:p-6 border-b border-[#2A1240] flex items-center justify-between shrink-0 gap-3">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="p-2 rounded-lg bg-neonPurple/20 text-neonPurple border border-neonPurple/30 shrink-0">
+                  <Sparkles size={18} />
+                </div>
+                <h3 className="text-base sm:text-lg font-bold text-white truncate">Generate Security Report</h3>
               </div>
               <button 
                 onClick={() => setIsModalOpen(false)}
-                className="text-textSecondary hover:text-white transition-colors"
+                className="p-1.5 rounded-lg text-textSecondary hover:text-white hover:bg-white/10 transition-colors shrink-0 cursor-pointer"
+                aria-label="Close modal"
               >
                 <X size={20} />
               </button>
             </div>
 
-            <form onSubmit={handleGenerate} className="p-6 space-y-4 text-xs font-sans">
+            {/* Scrollable Form Content */}
+            <form onSubmit={handleGenerate} className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 text-xs font-sans">
               <div className="space-y-1.5">
                 <label className="text-textSecondary font-semibold">Report Name</label>
                 <Input 
@@ -311,7 +415,7 @@ RECOMMENDED REMEDIATION:
                 <select
                   value={reportType}
                   onChange={(e) => setReportType(e.target.value)}
-                  className="w-full bg-[#090014] border border-[#2A1240] text-white text-xs h-10 rounded-xl px-3 focus:outline-none focus:border-neonPurple"
+                  className="w-full bg-[#090014] border border-[#2A1240] text-white text-xs h-10 rounded-xl px-3 focus:outline-none focus:border-neonPurple cursor-pointer"
                 >
                   <option value="Full Report">Full Security Report</option>
                   <option value="Executive Summary">Executive Summary</option>
@@ -323,15 +427,15 @@ RECOMMENDED REMEDIATION:
               <div className="space-y-2 pt-2">
                 <label className="text-textSecondary font-semibold block">Included Modules</label>
                 
-                <div className="space-y-2">
+                <div className="space-y-2.5">
                   <div className="flex items-center space-x-2">
                     <Checkbox id="incAI" checked={includeAI} onCheckedChange={(c) => setIncludeAI(!!c)} />
-                    <label htmlFor="incAI" className="text-white cursor-pointer">Include AI Risk Explanations & Actionable Advice</label>
+                    <label htmlFor="incAI" className="text-white cursor-pointer font-medium">Include AI Risk Explanations & Actionable Advice</label>
                   </div>
 
                   <div className="flex items-center space-x-2">
                     <Checkbox id="incSec" checked={includeSecrets} onCheckedChange={(c) => setIncludeSecrets(!!c)} />
-                    <label htmlFor="incSec" className="text-white cursor-pointer">Include Leaked Secret & Credential Incidents</label>
+                    <label htmlFor="incSec" className="text-white cursor-pointer font-medium">Include Leaked Secret & Credential Incidents</label>
                   </div>
                 </div>
               </div>
@@ -341,7 +445,7 @@ RECOMMENDED REMEDIATION:
                   type="button" 
                   variant="outline" 
                   onClick={() => setIsModalOpen(false)}
-                  className="text-xs"
+                  className="text-xs cursor-pointer"
                 >
                   Cancel
                 </Button>
@@ -349,7 +453,7 @@ RECOMMENDED REMEDIATION:
                 <Button 
                   type="submit" 
                   variant="gradient"
-                  className="text-xs flex items-center gap-1.5"
+                  className="text-xs flex items-center gap-1.5 cursor-pointer"
                 >
                   <CheckCircle2 size={14} />
                   <span>Generate Report</span>

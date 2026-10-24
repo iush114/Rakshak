@@ -1,25 +1,23 @@
-import { formatScore, formatNumber } from '@/utils/formatters';
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Editor from '@monaco-editor/react';
-import { 
-  Code2, 
-  UploadCloud, 
-  Search, 
-  Trash2, 
-  FileCode, 
-  Sparkles, 
-  ShieldAlert, 
-  Key, 
-  CheckCircle2, 
-  RefreshCw, 
-  AlertTriangle, 
-  ChevronRight, 
-  X, 
-  Copy, 
-  FileText, 
-  Box, 
-  Terminal
+import {
+  Code2,
+  UploadCloud,
+  Search,
+  Trash2,
+  FileCode,
+  Sparkles,
+  ShieldAlert,
+  Key,
+  CheckCircle2,
+  RefreshCw,
+  AlertTriangle,
+  ChevronRight,
+  X,
+  Copy,
+  FileText,
+  Box
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -120,13 +118,16 @@ const SCAN_STAGES = [
 
 export default function CodeScanner() {
   const navigate = useNavigate();
-  const { addScanResult, addReport } = useSecurity();
+  const { addScanResult, addReport, refreshData } = useSecurity();
 
   const [mode, setMode] = useState<'paste' | 'upload'>('paste');
+  // The backend scans a PATH (POST /api/scan -> target_path). "." is the
+  // configured scan root on the machine running Rakshak.
+  const [targetPath, setTargetPath] = useState('.');
   const [language, setLanguage] = useState('python');
   const [code, setCode] = useState(SAMPLE_PRESETS.python_vulnerable.code);
   const [uploadedFiles, setUploadedFiles] = useState<File[]>([]);
-  
+
   // Scanning state
   const [isScanning, setIsScanning] = useState(false);
   const [scanStageIndex, setScanStageIndex] = useState(0);
@@ -166,17 +167,12 @@ export default function CodeScanner() {
     setUploadedFiles(prev => prev.filter((_, i) => i !== index));
   };
 
-  // Start Security Scan Procedure
+  // Start Security Scan Procedure — real backend scan, no fabricated results.
   const handleStartScan = async () => {
     setErrorMsg(null);
 
-    // Validation
-    if (mode === 'paste' && !code.trim()) {
-      setErrorMsg('Please paste or enter valid source code before scanning.');
-      return;
-    }
-    if (mode === 'upload' && uploadedFiles.length === 0) {
-      setErrorMsg('Please upload at least one file or project archive to scan.');
+    if (!targetPath.trim()) {
+      setErrorMsg('Enter the project path Rakshak should scan (for example ".").');
       return;
     }
 
@@ -184,34 +180,35 @@ export default function CodeScanner() {
     setScanStageIndex(0);
     setScanResult(null);
 
-    // Animate stage progress simulation
-    for (let i = 0; i < SCAN_STAGES.length; i++) {
-      setScanStageIndex(i);
-      await new Promise(res => setTimeout(res, 350));
-    }
+    // Stage labels advance while the real request is in flight; they never
+    // stand in for a result.
+    const stageTimer = setInterval(() => {
+      setScanStageIndex(prev => (prev + 1 < SCAN_STAGES.length ? prev + 1 : prev));
+    }, 600);
 
     try {
-      const result = await performSecurityScan({
-        code: mode === 'paste' ? code : undefined,
-        files: mode === 'upload' ? uploadedFiles : undefined,
-        language: mode === 'paste' ? language : undefined,
-        projectName: mode === 'upload' && uploadedFiles.length > 0 ? uploadedFiles[0].name : 'Pasted Code Snippet'
-      });
+      const result = await performSecurityScan({ targetPath: targetPath.trim() });
 
       setScanResult(result);
-      
-      // Persist scan result automatically into global Security Context!
+      setScanStageIndex(SCAN_STAGES.length - 1);
+
       addScanResult({
         scanId: result.scanId,
-        repoName: mode === 'upload' && uploadedFiles.length > 0 ? uploadedFiles[0].name : `source_${language}_snippet`,
+        repoName: result.targetPath,
         score: result.score,
         findings: result.findings,
         secrets: result.secrets,
-        duration: '1.2s'
       });
-    } catch (_err) {
-      setErrorMsg('Security scan service encountered an unexpected error. Please check your file format and try again.');
+
+      // Dashboard / Findings read the backend, so refresh them from it.
+      await refreshData();
+    } catch (err: any) {
+      setErrorMsg(
+        err?.message ||
+          'The security scan failed. Check that the Rakshak backend is running and that you are signed in.'
+      );
     } finally {
+      clearInterval(stageTimer);
       setIsScanning(false);
     }
   };
@@ -239,7 +236,7 @@ export default function CodeScanner() {
 
   return (
     <div className="space-y-8 pb-16">
-      
+
       {/* 1. Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-border/50 pb-6">
         <div>
@@ -258,8 +255,8 @@ export default function CodeScanner() {
           <button
             onClick={() => { setMode('paste'); setScanResult(null); }}
             className={`px-5 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
-              mode === 'paste' 
-                ? 'bg-neonPurple text-white glow-neon shadow-lg' 
+              mode === 'paste'
+                ? 'bg-neonPurple text-white glow-neon shadow-lg'
                 : 'text-textSecondary hover:text-white'
             }`}
           >
@@ -269,8 +266,8 @@ export default function CodeScanner() {
           <button
             onClick={() => { setMode('upload'); setScanResult(null); }}
             className={`px-5 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
-              mode === 'upload' 
-                ? 'bg-neonPurple text-white glow-neon shadow-lg' 
+              mode === 'upload'
+                ? 'bg-neonPurple text-white glow-neon shadow-lg'
                 : 'text-textSecondary hover:text-white'
             }`}
           >
@@ -292,15 +289,37 @@ export default function CodeScanner() {
         </div>
       )}
 
+      {/* Scan target — the backend scans this path (POST /api/scan target_path) */}
+      {!isScanning && !scanResult && (
+        <Card className="border-border bg-card/80">
+          <CardContent className="p-5 space-y-2">
+            <label htmlFor="scan-target-path" className="text-xs font-bold text-white uppercase tracking-wider block">
+              Scan target path
+            </label>
+            <input
+              id="scan-target-path"
+              type="text"
+              value={targetPath}
+              onChange={(e) => setTargetPath(e.target.value)}
+              placeholder="."
+              className="w-full px-3 py-2 rounded-lg bg-[#090014] border border-[#2A1240] text-xs font-mono text-white focus:outline-none focus:border-neonPurple"
+            />
+            <p className="text-[11px] text-textSecondary">
+              Path on the machine running the Rakshak backend, inside the configured scan roots. Use "." for the project root.
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
       {/* 2. Main Mode Input Area (Hidden while scanning or showing results) */}
       {!isScanning && !scanResult && (
         <Card className="border-border bg-card/80 shadow-2xl backdrop-blur-xl">
           <CardContent className="p-6 space-y-6">
-            
+
             {/* PASTE CODE MODE */}
             {mode === 'paste' ? (
               <div className="space-y-4">
-                
+
                 {/* Editor Control Bar */}
                 <div className="flex flex-wrap items-center justify-between gap-4 p-3 rounded-xl bg-[#090014] border border-[#2A1240]">
                   <div className="flex items-center gap-3">
@@ -427,7 +446,7 @@ export default function CodeScanner() {
                           <div className="flex items-center gap-3 font-mono">
                             <FileCode size={16} className="text-neonPurple" />
                             <span className="text-white font-semibold">{file.name}</span>
-                            <span className="text-[#C4B5FD]/60 text-[11px]">({formatNumber(file.size / 1024, 2)} KB)</span>
+                            <span className="text-[#C4B5FD]/60 text-[11px]">({(file.size / 1024).toFixed(1)} KB)</span>
                           </div>
                           <button
                             onClick={() => removeFile(idx)}
@@ -464,7 +483,7 @@ export default function CodeScanner() {
       {isScanning && (
         <Card className="bg-[#12051F]/90 border-[#A855F7]/40 shadow-2xl p-8 backdrop-blur-xl">
           <div className="max-w-2xl mx-auto space-y-8 text-center">
-            
+
             {/* Top Scanning Radar Orb */}
             <div className="relative w-28 h-28 mx-auto flex items-center justify-center">
               <div className="absolute inset-0 rounded-full border-2 border-neonPurple/40 animate-ping opacity-75" />
@@ -513,7 +532,7 @@ export default function CodeScanner() {
 
             {/* Outer Progress Bar */}
             <div className="w-full bg-[#090014] h-2 rounded-full overflow-hidden border border-[#2A1240]">
-              <div 
+              <div
                 className="h-full bg-rakshak-gradient transition-all duration-300 rounded-full"
                 style={{ width: `${((scanStageIndex + 1) / SCAN_STAGES.length) * 100}%` }}
               />
@@ -526,15 +545,15 @@ export default function CodeScanner() {
       {/* 4. SCAN RESULT DASHBOARD */}
       {scanResult && !isScanning && (
         <div className="space-y-8 animate-in fade-in duration-500">
-          
+
           {/* Top Score Banner + Risk Badge */}
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-center">
-            
+
             {/* Security Score Meter */}
             <Card className="lg:col-span-5 bg-gradient-to-br from-[#12051F] to-[#1e0736] border-neonPurple/40 glow-neon">
               <CardContent className="p-6 flex flex-col items-center justify-center text-center">
                 <span className="text-xs font-bold text-textSecondary uppercase tracking-wider mb-2">Overall Security Score</span>
-                
+
                 {/* Radial Score Gauge */}
                 <div className="relative w-40 h-40 flex items-center justify-center">
                   <svg className="w-full h-full transform -rotate-90" viewBox="0 0 36 36">
@@ -556,7 +575,7 @@ export default function CodeScanner() {
                     />
                   </svg>
                   <div className="absolute flex flex-col items-center justify-center">
-                    <span className="text-4xl font-black text-white">{formatScore(scanResult.score)}</span>
+                    <span className="text-4xl font-black text-white">{scanResult.score}</span>
                     <span className="text-xs text-textSecondary font-bold">/ 100</span>
                   </div>
                 </div>
@@ -726,67 +745,17 @@ export default function CodeScanner() {
             </CardContent>
           </Card>
 
-          {/* 6. AI SECURITY ANALYSIS PANEL */}
-          <Card className="bg-gradient-to-br from-[#12051F] via-[#1c0733] to-[#250942] border-[#A855F7]/40 shadow-2xl">
-            <CardHeader className="border-b border-[#2A1240] pb-4 flex flex-row items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="p-2 rounded-xl bg-neonPurple/20 text-neonPurple">
-                  <Sparkles size={22} className="animate-pulse" />
-                </div>
-                <div>
-                  <CardTitle className="text-xl font-bold text-white">AI Security Analysis</CardTitle>
-                  <CardDescription className="text-xs text-textSecondary">
-                    AI-assisted analysis generated by Rakshak AI reasoning engine
-                  </CardDescription>
-                </div>
-              </div>
-              <Badge variant="outline" className="text-xs text-success border-success/30">AI-Assisted</Badge>
-            </CardHeader>
-
-            <CardContent className="p-6 space-y-6 text-xs text-foreground leading-relaxed">
-              
-              <div className="p-4 rounded-xl bg-[#090014]/80 border border-[#2A1240] space-y-1">
-                <span className="font-bold text-neonPurple text-xs uppercase tracking-wider block">Security Summary</span>
-                <p>{scanResult.aiAnalysis.summary}</p>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="p-4 rounded-xl bg-danger/10 border border-danger/30 space-y-2">
-                  <span className="font-bold text-danger text-xs uppercase tracking-wider block flex items-center gap-1.5">
-                    <AlertTriangle size={15} />
-                    Most Dangerous Issues
-                  </span>
-                  <ul className="space-y-1.5 font-mono text-[11px] text-foreground/90">
-                    {scanResult.aiAnalysis.mostDangerousIssues.map((issue, idx) => (
-                      <li key={idx} className="flex items-start gap-1.5">
-                        <span className="text-danger font-bold">•</span>
-                        <span>{issue}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-
-                <div className="p-4 rounded-xl bg-warning/10 border border-warning/30 space-y-2">
-                  <span className="font-bold text-warning text-xs uppercase tracking-wider block">Why It Matters</span>
-                  <p>{scanResult.aiAnalysis.whyItMatters}</p>
-                </div>
-              </div>
-
-              <div className="p-4 rounded-xl bg-[#090014] border border-[#2A1240] space-y-3 font-mono">
-                <span className="font-bold text-white text-xs uppercase tracking-wider block font-sans flex items-center gap-2">
-                  <Terminal size={16} className="text-neonPurple" />
-                  Recommended Fixes & Secure Alternatives
-                </span>
-                <ul className="space-y-2 text-xs text-textSecondary">
-                  {scanResult.aiAnalysis.recommendedFixes.map((fix, idx) => (
-                    <li key={idx} className="flex items-start gap-2 text-foreground/90">
-                      <span className="text-success font-bold">✓</span>
-                      <span>{fix}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-
+          {/* 6. AI ANALYSIS POINTER
+              AI analysis is on-demand and PER FINDING (Findings -> Analyze with
+              AI). The scan-level AI panel that used to live here was generated
+              client-side and described nothing the backend had analyzed. */}
+          <Card className="bg-[#12051F] border-[#A855F7]/30">
+            <CardContent className="p-5 flex items-center gap-3 text-xs text-textSecondary">
+              <Sparkles size={18} className="text-neonPurple" />
+              <span>
+                Open a finding in <strong className="text-white">Findings</strong> and choose
+                <strong className="text-white"> Analyze with AI</strong> for AI analysis of that specific finding.
+              </span>
             </CardContent>
           </Card>
 

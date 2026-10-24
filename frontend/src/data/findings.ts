@@ -1,5 +1,10 @@
 export interface Finding {
   id: string;
+  /** Exact backend Finding.id. The same vulnerabilityId occurs in many files,
+   *  so this is what identifies a single finding for AI analysis. */
+  backendId?: number;
+  scanId?: string;
+  target?: string;
   vulnerabilityId?: string;
   cve: string;
   title: string;
@@ -9,6 +14,7 @@ export interface Finding {
   riskScore: number;
   exploitability: string;
   tool: string;
+  scannerType?: string;
   package: string;
   version?: string;
   fixedVersion: string;

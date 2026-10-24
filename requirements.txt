@@ -24,3 +24,6 @@ redis>=5.0.0
 SQLAlchemy==2.0.52
 alembic==1.19.2
 psycopg[binary]==3.3.5
+argon2-cffi>=23.1.0
+
+firebase-admin>=7.0.0

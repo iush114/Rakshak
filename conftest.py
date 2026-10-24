@@ -96,6 +96,7 @@ def ensure_webhook_workspace(installation_ids=(), repository_full_name=None, log
                 github_user_id=github_user_id,
                 github_login=login,
                 name="Webhook Test Owner",
+                is_verified=True,
                 created_at=now,
                 last_seen_at=now,
             )
@@ -179,6 +180,7 @@ def create_workspace_user(
                 name=name,
                 avatar_url=avatar_url,
                 html_url=html_url,
+                is_verified=True,
                 created_at=now,
                 last_seen_at=now,
             )

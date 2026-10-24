@@ -19,11 +19,21 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { motion, AnimatePresence } from 'framer-motion';
+import { HeroShieldCanvas } from '@/components/3d/HeroShieldCanvas';
 
 export default function GetStarted() {
   const navigate = useNavigate();
   const [activeDemoTab, setActiveDemoTab] = useState<'cve' | 'secrets' | 'ai'>('cve');
   const [isSimulatingAI, setIsSimulatingAI] = useState(false);
+  const [isShieldPulsing, setIsShieldPulsing] = useState(false);
+
+  const handleLaunchScan = () => {
+    setIsShieldPulsing(true);
+    setTimeout(() => {
+      setIsShieldPulsing(false);
+      navigate('/register');
+    }, 450);
+  };
 
   const handleSimulateAI = () => {
     setIsSimulatingAI(true);
@@ -98,114 +108,150 @@ export default function GetStarted() {
       </header>
 
       {/* ========================================================= */}
-      {/* 2. HERO SECTION */}
+      {/* 2. HERO SECTION WITH 3D HOLOGRAPHIC SHIELD */}
       {/* ========================================================= */}
-      <section className="relative pt-16 pb-20 px-4 sm:px-6 max-w-7xl mx-auto flex flex-col items-center text-center z-10">
-        
-        {/* Glowing Pill Badge */}
-        <motion.div
-          initial={{ opacity: 0, y: -15 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5 }}
-          className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-[#12051F] border border-[#A855F7]/40 shadow-[0_0_20px_rgba(168,85,247,0.25)] text-xs font-semibold text-[#C4B5FD] mb-6"
-        >
-          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-          <Sparkles size={14} className="text-[#EC4899]" />
-          <span>Next-Gen AI Security Engine 2.0</span>
-          <span className="text-zinc-600">|</span>
-          <span className="text-white font-bold">Zero Setup Required</span>
-        </motion.div>
+      <section className="relative pt-12 pb-20 px-4 sm:px-6 max-w-7xl mx-auto z-10">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-8 items-center">
+          
+          {/* Left Column: Headline, Subtitle, CTAs & Trust Badges */}
+          <div className="lg:col-span-7 flex flex-col items-center lg:items-start text-center lg:text-left space-y-6">
+            
+            {/* Glowing Pill Badge */}
+            <motion.div
+              initial={{ opacity: 0, y: -15 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.5 }}
+              className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-[#12051F] border border-[#A855F7]/40 shadow-[0_0_20px_rgba(168,85,247,0.25)] text-xs font-semibold text-[#C4B5FD]"
+            >
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+              <Sparkles size={14} className="text-[#EC4899]" />
+              <span>Next-Gen AI Security Engine 2.0</span>
+              <span className="text-zinc-600">|</span>
+              <span className="text-white font-bold">Zero Setup Required</span>
+            </motion.div>
 
-        {/* Main Hero Headline */}
-        <motion.h1
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.6, delay: 0.1 }}
-          className="text-4xl sm:text-6xl lg:text-7xl font-black tracking-tight max-w-5xl leading-[1.15]"
-        >
-          Defend Code. Detect CVEs. <br />
-          <span className="text-rakshak-gradient">
-            Remediate with Instant AI.
-          </span>
-        </motion.h1>
+            {/* Main Hero Headline */}
+            <motion.h1
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.6, delay: 0.1 }}
+              className="text-4xl sm:text-5xl lg:text-6xl font-black tracking-tight leading-[1.15]"
+            >
+              Defend Code. Detect CVEs. <br />
+              <span className="text-rakshak-gradient">
+                Remediate with Instant AI.
+              </span>
+            </motion.h1>
 
-        {/* Subtitle */}
-        <motion.p
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.6, delay: 0.2 }}
-          className="text-base sm:text-xl text-[#C4B5FD]/90 max-w-3xl mt-6 leading-relaxed font-normal"
-        >
-          Rakshak combines AST vulnerability parsing, Trivy dependency audits, Gitleaks secret detection, and Cloudflare Workers AI to identify threats and autonomously generate production-ready fixes in seconds.
-        </motion.p>
+            {/* Subtitle */}
+            <motion.p
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.6, delay: 0.2 }}
+              className="text-base sm:text-lg text-[#C4B5FD]/90 max-w-2xl leading-relaxed font-normal"
+            >
+              Rakshak combines AST vulnerability parsing, Trivy dependency audits, Gitleaks secret detection, and Cloudflare Workers AI to identify threats and autonomously generate production-ready fixes in seconds.
+            </motion.p>
 
-        {/* Primary Call-To-Action Group */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.6, delay: 0.3 }}
-          className="flex flex-wrap items-center justify-center gap-4 mt-10"
-        >
-          <Button
-            onClick={() => navigate('/register')}
-            size="lg"
-            className="bg-rakshak-gradient text-white font-bold px-8 py-6 rounded-2xl text-base shadow-[0_0_30px_rgba(168,85,247,0.45)] hover:shadow-[0_0_40px_rgba(236,72,153,0.6)] hover:scale-105 active:scale-95 transition-all flex items-center gap-3 cursor-pointer"
+            {/* Primary Call-To-Action Group */}
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.6, delay: 0.3 }}
+              className="flex flex-wrap items-center justify-center lg:justify-start gap-4 pt-2"
+            >
+              <Button
+                onClick={handleLaunchScan}
+                size="lg"
+                className="bg-rakshak-gradient text-white font-bold px-8 py-6 rounded-2xl text-base shadow-[0_0_30px_rgba(168,85,247,0.45)] hover:shadow-[0_0_40px_rgba(236,72,153,0.6)] hover:scale-105 active:scale-95 transition-all flex items-center gap-3 cursor-pointer group"
+              >
+                <Zap size={20} className="text-yellow-300 group-hover:rotate-12 transition-transform" />
+                <span>Get Started with Rakshak</span>
+                <ArrowRight size={18} className="group-hover:translate-x-1 transition-transform" />
+              </Button>
+
+              <Button
+                variant="outline"
+                onClick={() => navigate('/dashboard')}
+                size="lg"
+                className="bg-[#12051F]/80 border-[#2A1240] hover:border-[#A855F7]/70 text-white font-semibold px-7 py-6 rounded-2xl text-base hover:bg-[#1C0830] transition-all flex items-center gap-2.5 shadow-[0_0_20px_rgba(0,0,0,0.5)] cursor-pointer"
+              >
+                <Play size={18} className="text-[#EC4899] fill-[#EC4899]" />
+                <span>Explore Live Dashboard</span>
+              </Button>
+            </motion.div>
+
+            {/* Trust Badges */}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ duration: 0.7, delay: 0.4 }}
+              className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-4 w-full max-w-xl text-left"
+            >
+              <div className="p-3.5 rounded-2xl bg-[#12051F]/60 border border-[#2A1240] flex items-center gap-2.5">
+                <Shield className="w-4 h-4 text-emerald-400 shrink-0" />
+                <div>
+                  <p className="text-xs font-bold text-white">OWASP & CWE</p>
+                  <p className="text-[10px] text-[#C4B5FD]/70">Strict Compliance</p>
+                </div>
+              </div>
+
+              <div className="p-3.5 rounded-2xl bg-[#12051F]/60 border border-[#2A1240] flex items-center gap-2.5">
+                <Zap className="w-4 h-4 text-yellow-400 shrink-0" />
+                <div>
+                  <p className="text-xs font-bold text-white">&lt; 50ms Parsing</p>
+                  <p className="text-[10px] text-[#C4B5FD]/70">Sub-second Speed</p>
+                </div>
+              </div>
+
+              <div className="p-3.5 rounded-2xl bg-[#12051F]/60 border border-[#2A1240] flex items-center gap-2.5">
+                <Cpu className="w-4 h-4 text-[#EC4899] shrink-0" />
+                <div>
+                  <p className="text-xs font-bold text-white">Cloudflare AI</p>
+                  <p className="text-[10px] text-[#C4B5FD]/70">Deep Remediation</p>
+                </div>
+              </div>
+
+              <div className="p-3.5 rounded-2xl bg-[#12051F]/60 border border-[#2A1240] flex items-center gap-2.5">
+                <KeyRound className="w-4 h-4 text-[#A855F7] shrink-0" />
+                <div>
+                  <p className="text-xs font-bold text-white">Secret Scanner</p>
+                  <p className="text-[10px] text-[#C4B5FD]/70">Gitleaks Integration</p>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+
+          {/* Right Column: 3D Holographic Shield Showcase */}
+          <motion.div
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ duration: 0.8, delay: 0.2 }}
+            className="lg:col-span-5 relative flex items-center justify-center mt-8 lg:mt-0 w-full"
           >
-            <Zap size={20} className="text-yellow-300" />
-            <span>Get Started with Rakshak</span>
-            <ArrowRight size={18} />
-          </Button>
+            {/* Ambient Background Aura */}
+            <div className="absolute inset-0 bg-gradient-to-tr from-[#00f2fe]/20 via-[#a855f7]/15 to-transparent rounded-full filter blur-[90px] pointer-events-none" />
 
-          <Button
-            variant="outline"
-            onClick={() => navigate('/dashboard')}
-            size="lg"
-            className="bg-[#12051F]/80 border-[#2A1240] hover:border-[#A855F7]/70 text-white font-semibold px-7 py-6 rounded-2xl text-base hover:bg-[#1C0830] transition-all flex items-center gap-2.5 shadow-[0_0_20px_rgba(0,0,0,0.5)] cursor-pointer"
-          >
-            <Play size={18} className="text-[#EC4899] fill-[#EC4899]" />
-            <span>Explore Live Dashboard</span>
-          </Button>
-        </motion.div>
+            {/* Central 3D Canvas Box - Balanced, responsive dimensions */}
+            <div className="relative w-full max-w-[480px] h-[380px] sm:h-[460px] lg:h-[480px] flex items-center justify-center">
+              <HeroShieldCanvas 
+                className="w-full h-full"
+                isPulsing={isShieldPulsing}
+                onShieldClick={handleLaunchScan}
+              />
 
-        {/* Trust Badges */}
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ duration: 0.7, delay: 0.4 }}
-          className="grid grid-cols-2 sm:grid-cols-4 gap-4 sm:gap-8 mt-14 max-w-4xl w-full text-left"
-        >
-          <div className="p-4 rounded-2xl bg-[#12051F]/60 border border-[#2A1240] flex items-center gap-3">
-            <Shield className="w-5 h-5 text-emerald-400 shrink-0" />
-            <div>
-              <p className="text-xs font-bold text-white">OWASP & CWE</p>
-              <p className="text-[11px] text-[#C4B5FD]/70">Strict Compliance</p>
+              {/* Floating Live Telemetry Overlay Badges */}
+              <div className="absolute top-2 left-2 sm:left-4 cyber-glass px-3.5 py-2 rounded-2xl border border-cyan-500/30 flex items-center gap-2.5 text-xs shadow-lg animate-bounce [animation-duration:4s] pointer-events-none z-10">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                <div>
+                  <span className="text-[10px] uppercase font-bold text-zinc-400 block">Defense Perimeter</span>
+                  <span className="font-mono font-bold text-cyan-300">SHIELD-V2: ACTIVE</span>
+                </div>
+              </div>
             </div>
-          </div>
+          </motion.div>
 
-          <div className="p-4 rounded-2xl bg-[#12051F]/60 border border-[#2A1240] flex items-center gap-3">
-            <Zap className="w-5 h-5 text-yellow-400 shrink-0" />
-            <div>
-              <p className="text-xs font-bold text-white">&lt; 50ms Parsing</p>
-              <p className="text-[11px] text-[#C4B5FD]/70">Sub-second Speed</p>
-            </div>
-          </div>
-
-          <div className="p-4 rounded-2xl bg-[#12051F]/60 border border-[#2A1240] flex items-center gap-3">
-            <Cpu className="w-5 h-5 text-[#EC4899] shrink-0" />
-            <div>
-              <p className="text-xs font-bold text-white">Cloudflare AI</p>
-              <p className="text-[11px] text-[#C4B5FD]/70">Deep Remediation</p>
-            </div>
-          </div>
-
-          <div className="p-4 rounded-2xl bg-[#12051F]/60 border border-[#2A1240] flex items-center gap-3">
-            <KeyRound className="w-5 h-5 text-[#A855F7] shrink-0" />
-            <div>
-              <p className="text-xs font-bold text-white">Secret Scanner</p>
-              <p className="text-[11px] text-[#C4B5FD]/70">Gitleaks Integration</p>
-            </div>
-          </div>
-        </motion.div>
+        </div>
       </section>
 
       {/* ========================================================= */}

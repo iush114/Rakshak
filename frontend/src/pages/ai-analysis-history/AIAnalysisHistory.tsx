@@ -1,5 +1,4 @@
-import { formatScore } from '@/utils/formatters';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   BrainCircuit,
   Eye,
@@ -17,6 +16,26 @@ import { motion, AnimatePresence } from 'framer-motion';
 export default function AIAnalysisHistory() {
   const { aiHistory } = useSecurity();
   const [selectedRecord, setSelectedRecord] = useState<AIAnalysisRecord | null>(null);
+
+  // Prevent background page scrolling while modal is open & handle Escape key
+  useEffect(() => {
+    if (selectedRecord) {
+      const originalOverflow = document.body.style.overflow;
+      document.body.style.overflow = 'hidden';
+
+      const handleKeyDown = (e: KeyboardEvent) => {
+        if (e.key === 'Escape') {
+          setSelectedRecord(null);
+        }
+      };
+      window.addEventListener('keydown', handleKeyDown);
+
+      return () => {
+        document.body.style.overflow = originalOverflow;
+        window.removeEventListener('keydown', handleKeyDown);
+      };
+    }
+  }, [selectedRecord]);
 
   return (
     <div className="space-y-6 pb-12">
@@ -87,7 +106,7 @@ export default function AIAnalysisHistory() {
 
                       {/* Risk Score */}
                       <td className="px-5 py-4 whitespace-nowrap">
-                        <span className="font-black text-warning text-sm">{formatScore(item.riskScore)}/100</span>
+                        <span className="font-black text-warning text-sm">{item.riskScore}/100</span>
                       </td>
 
                       {/* AI Model */}
@@ -120,34 +139,39 @@ export default function AIAnalysisHistory() {
       {/* AI ANALYSIS RECORD DETAILS MODAL */}
       <AnimatePresence>
         {selectedRecord && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 backdrop-blur-md p-4">
+          <div
+            onClick={() => setSelectedRecord(null)}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md p-3 sm:p-4 overflow-hidden"
+          >
             <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
-              className="w-full max-w-2xl bg-[#12051F] border border-[#2A1240] rounded-2xl shadow-2xl overflow-hidden"
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-2xl max-h-[calc(100vh-24px)] sm:max-h-[calc(100vh-32px)] max-h-[calc(100dvh-24px)] sm:max-h-[calc(100dvh-32px)] flex flex-col bg-[#12051F] border border-[#2A1240] rounded-2xl shadow-2xl overflow-hidden"
             >
               {/* Header */}
-              <div className="p-6 border-b border-[#2A1240] flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="p-2.5 rounded-xl bg-neonPurple/20 text-neonPurple border border-neonPurple/30">
+              <div className="p-4 sm:p-6 border-b border-[#2A1240] flex items-center justify-between shrink-0 gap-3">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="p-2.5 rounded-xl bg-neonPurple/20 text-neonPurple border border-neonPurple/30 shrink-0">
                     <Sparkles size={24} />
                   </div>
-                  <div>
-                    <h2 className="text-xl font-bold text-white font-mono">{selectedRecord.cve}</h2>
-                    <p className="text-xs text-textSecondary">{selectedRecord.title}</p>
+                  <div className="min-w-0">
+                    <h2 className="text-lg sm:text-xl font-bold text-white font-mono truncate">{selectedRecord.cve}</h2>
+                    <p className="text-xs text-textSecondary truncate">{selectedRecord.title}</p>
                   </div>
                 </div>
                 <button
                   onClick={() => setSelectedRecord(null)}
-                  className="text-textSecondary hover:text-white transition-colors"
+                  className="p-1.5 sm:p-2 rounded-lg text-textSecondary hover:text-white hover:bg-white/10 transition-colors shrink-0 cursor-pointer"
+                  aria-label="Close modal"
                 >
                   <X size={20} />
                 </button>
               </div>
 
-              {/* Content */}
-              <div className="p-6 space-y-4 text-xs font-sans">
+              {/* Scrollable Content */}
+              <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 text-xs font-sans">
 
                 {/* Metadata Pills */}
                 <div className="grid grid-cols-3 gap-3 p-3 rounded-xl bg-[#090014] border border-[#2A1240] text-center">
@@ -157,7 +181,7 @@ export default function AIAnalysisHistory() {
                   </div>
                   <div>
                     <span className="text-[10px] text-textSecondary uppercase">Risk Score</span>
-                    <span className="text-sm font-black text-warning block mt-0.5">{formatScore(selectedRecord.riskScore)}/100</span>
+                    <span className="text-sm font-black text-warning block mt-0.5">{selectedRecord.riskScore}/100</span>
                   </div>
                   <div>
                     <span className="text-[10px] text-textSecondary uppercase">AI Model</span>
@@ -194,7 +218,7 @@ export default function AIAnalysisHistory() {
                   <Button
                     variant="outline"
                     onClick={() => setSelectedRecord(null)}
-                    className="text-xs"
+                    className="text-xs cursor-pointer"
                   >
                     Close
                   </Button>

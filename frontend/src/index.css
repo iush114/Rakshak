@@ -1,4 +1,4 @@
-﻿@tailwind base;
+@tailwind base;
 @tailwind components;
 @tailwind utilities;
 
@@ -49,8 +49,16 @@
   .bg-rakshak-gradient {
     background: linear-gradient(135deg, #7c3aed 0%, #9333ea 35%, #c026d3 70%, #ec4899 100%);
   }
+  .bg-cyber-gradient {
+    background: linear-gradient(135deg, #00f2fe 0%, #0284c7 50%, #4f46e5 100%);
+  }
   .text-rakshak-gradient {
     background: linear-gradient(135deg, #7c3aed 0%, #9333ea 35%, #c026d3 70%, #ec4899 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .text-cyber-gradient {
+    background: linear-gradient(135deg, #ffffff 0%, #38bdf8 45%, #00f2fe 100%);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
   }
@@ -62,6 +70,15 @@
   .glow-neon {
     box-shadow: 0 0 15px rgba(168, 85, 247, 0.5);
   }
+  .glow-cyan {
+    box-shadow: 0 0 20px rgba(0, 242, 254, 0.35);
+  }
+  .glow-cyan-lg {
+    box-shadow: 0 0 35px rgba(0, 242, 254, 0.55);
+  }
+  .glow-blue {
+    box-shadow: 0 0 20px rgba(56, 189, 248, 0.3);
+  }
   .glow-danger {
     box-shadow: 0 0 15px rgba(239, 68, 68, 0.5);
   }
@@ -70,30 +87,86 @@
     backdrop-filter: blur(12px);
     border: 1px solid rgba(42, 18, 64, 0.8);
   }
+  .cyber-glass {
+    background: rgba(7, 13, 30, 0.72);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(0, 242, 254, 0.15);
+  }
+  .cyber-glass:hover {
+    border-color: rgba(0, 242, 254, 0.35);
+  }
+  .cyber-grid {
+    background-image: 
+      linear-gradient(to right, rgba(0, 242, 254, 0.04) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(0, 242, 254, 0.04) 1px, transparent 1px);
+    background-size: 32px 32px;
+  }
+  .scanline {
+    background: linear-gradient(
+      to bottom,
+      transparent 50%,
+      rgba(0, 242, 254, 0.04) 51%,
+      transparent 52%
+    );
+    background-size: 100% 4px;
+  }
 }
 
-/* Controlled Glow and Glassmorphism */
-[data-glow="false"] .glow-neon,
-[data-glow="false"] .glow-danger,
-[data-glow="false"] [class*="glow-"],
-[data-glow="false"] [class*="shadow-[0_0_"],
-[data-glow="false"] [class*="drop-shadow-[0_0_"] {
+@keyframes radarSweep {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+@keyframes beamSweep {
+  0% { transform: translateY(-100%); opacity: 0; }
+  50% { opacity: 0.8; }
+  100% { transform: translateY(100%); opacity: 0; }
+}
+
+.animate-radar {
+  animation: radarSweep 4s linear infinite;
+}
+
+.animate-beam {
+  animation: beamSweep 2.5s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-radar,
+  .animate-beam {
+    animation: none !important;
+  }
+}
+
+
+
+/* ============================================================
+   NEON EFFECT TOGGLE ENFORCEMENT
+   When data-glow="false" or data-neon="false", disable intense
+   glowing halos, text-glows, and neon scanlines while preserving
+   all normal background colors, borders, contrast, and layout.
+   ============================================================ */
+html[data-glow="false"] .glow-neon,
+html[data-glow="false"] .glow-cyan,
+html[data-glow="false"] .glow-cyan-lg,
+html[data-glow="false"] .glow-blue,
+html[data-glow="false"] .glow-danger,
+html[data-glow="false"] [class*="shadow-[0_0_"],
+html[data-glow="false"] [class*="drop-shadow-[0_0_"],
+html[data-neon="false"] .glow-neon,
+html[data-neon="false"] .glow-cyan,
+html[data-neon="false"] .glow-cyan-lg,
+html[data-neon="false"] .glow-blue,
+html[data-neon="false"] .glow-danger,
+html[data-neon="false"] [class*="shadow-[0_0_"],
+html[data-neon="false"] [class*="drop-shadow-[0_0_"] {
   box-shadow: none !important;
   filter: none !important;
-  drop-shadow: none !important;
+  text-shadow: none !important;
 }
 
-[data-glow="false"] [class*="hover:shadow-[0_0_"]:hover,
-[data-glow="false"] [class*="hover:glow-"]:hover {
-  box-shadow: none !important;
-}
-
-[data-glow="false"] .glass,
-[data-glow="false"] [class*="backdrop-blur"] {
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
-}
-
-[data-glow="false"] .ambient-glow {
-  display: none !important;
+html[data-glow="false"] .scanline,
+html[data-neon="false"] .scanline {
+  background: none !important;
 }

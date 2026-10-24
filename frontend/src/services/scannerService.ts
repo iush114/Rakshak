@@ -1,14 +1,38 @@
 import type { FindingItem, SecretItem } from '@/context/SecurityContext';
+import { performScan, type ApiScanRequest } from '@/services/api';
+
+/**
+ * Scanner service.
+ *
+ * This module used to POST FormData to /api/scan without `credentials`, which
+ * the session-cookie backend could never accept, and then silently fell back to
+ * a client-side "scanner" that fabricated findings, secrets and AI text. Those
+ * results looked real but described nothing that was ever scanned.
+ *
+ * It now calls the real backend through the shared API client: JSON body,
+ * `credentials: 'include'`, real findings, and a thrown error when the scan
+ * fails. There is no fabricated fallback anywhere in the product UI.
+ *
+ * Note: the backend scans a PATH on the machine running Rakshak
+ * (POST /api/scan takes `target_path`). It has no endpoint that accepts pasted
+ * source text or uploaded files, so callers must supply a target path.
+ */
 
 export interface CodeScanRequest {
-  code?: string;
-  files?: File[];
+  /** Path the backend should scan, e.g. "." for the configured scan root. */
+  targetPath?: string;
+  codeScanning?: boolean;
+  dependencyScanning?: boolean;
+  secretDetection?: boolean;
+  containerScanning?: boolean;
+  /** Retained for display only — never sent, the backend scans paths. */
   language?: string;
   projectName?: string;
 }
 
 export interface CodeScanResponse {
   scanId: string;
+  targetPath: string;
   score: number;
   riskLevel: 'EXCELLENT' | 'GOOD' | 'MODERATE RISK' | 'HIGH RISK' | 'CRITICAL RISK';
   totalFindings: number;
@@ -20,332 +44,74 @@ export interface CodeScanResponse {
   vulnerableDependenciesCount: number;
   findings: FindingItem[];
   secrets: SecretItem[];
-  aiAnalysis: {
-    summary: string;
-    mostDangerousIssues: string[];
-    whyItMatters: string;
-    recommendedFixes: string[];
-    secureCodeSuggestions: string;
-  };
-  trivyResults: Array<{
-    package: string;
-    version: string;
-    cve: string;
-    severity: string;
-    fixedVersion: string;
-    recommendation: string;
-  }>;
 }
 
-// FastAPI Backend URL configuration
-const RAW_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000';
-const FASTAPI_BASE_URL = `${RAW_URL.replace(/\/api\/?$/, '').replace(/\/+$/, '')}/api`;
+function riskLevelFor(score: number): CodeScanResponse['riskLevel'] {
+  if (score >= 85) return 'CRITICAL RISK';
+  if (score >= 70) return 'HIGH RISK';
+  if (score >= 40) return 'MODERATE RISK';
+  if (score >= 20) return 'GOOD';
+  return 'EXCELLENT';
+}
 
+/**
+ * Run a real backend security scan.
+ *
+ * Throws on any backend/authentication failure — callers must surface the
+ * error rather than display invented results.
+ */
 export async function performSecurityScan(req: CodeScanRequest): Promise<CodeScanResponse> {
-  const scanId = `SCAN-${Math.floor(100000 + Math.random() * 900000)}`;
+  const targetPath = (req.targetPath || '').trim();
 
-  try {
-    const formData = new FormData();
-    if (req.code) formData.append('code', req.code);
-    if (req.language) formData.append('language', req.language);
-    if (req.files && req.files.length > 0) {
-      req.files.forEach(f => formData.append('files', f));
-    }
-
-    const res = await fetch(`${FASTAPI_BASE_URL}/scan`, {
-      method: 'POST',
-      body: formData,
-    });
-
-    if (res.ok) {
-      const data = await res.json();
-      return data as CodeScanResponse;
-    }
-  } catch (_e) {
-    console.log("FastAPI backend offline. Executing client-side DevSecOps AST & Gitleaks parser engine...");
+  if (!targetPath) {
+    throw new Error(
+      'A scan target path is required. Enter the path Rakshak should scan (for example ".").'
+    );
   }
 
-  let sourceText = req.code || '';
-  let fileName = req.projectName || 'submitted_file.py';
+  const payload: ApiScanRequest = {
+    target_path: targetPath,
+    code_scanning: req.codeScanning !== false,
+    dependency_scanning: req.dependencyScanning !== false,
+    secret_detection: req.secretDetection !== false,
+    container_scanning: req.containerScanning === true,
+  };
 
-  if (req.files && req.files.length > 0) {
-    fileName = req.files[0].name;
-    try {
-      sourceText = await req.files[0].text();
-    } catch {
-      sourceText = req.code || '';
-    }
-  }
+  const data = await performScan(payload);
+  const findings = data.mappedFindings;
+  const score = data.overall_risk ?? data.overall_risk_score ?? 0;
 
-  const findings: FindingItem[] = [];
-  const secrets: SecretItem[] = [];
-  const trivyResults: CodeScanResponse['trivyResults'] = [];
-
-  const lines = sourceText.split('\n');
-
-  lines.forEach((lineText, idx) => {
-    const lineNum = idx + 1;
-    // AWS Access Key Pattern
-    if (/(AKIA[0-9A-Z]{16})/.test(lineText)) {
-      const match = lineText.match(/(AKIA[0-9A-Z]{16})/)?.[0] || 'AKIA1234567890EXAMPLE';
-      secrets.push({
-        id: `sec-${Date.now()}-${idx}`,
-        type: 'AWS Access Key ID',
-        maskedSecret: `${match.substring(0, 4)}************XXXX`,
-        rawSecret: match,
-        filePath: fileName,
-        line: lineNum,
-        confidence: 'HIGH',
-        status: 'Active',
-        timestamp: new Date().toLocaleString(),
-        repo: 'code-scan-target'
-      });
-      findings.push({
-        id: `f-${Date.now()}-${idx}`,
-        cve: 'CWE-798',
-        title: 'Exposed Hardcoded AWS Access Key',
-        severity: 'critical',
-        priority: 'Critical',
-        package: 'Exposed Credentials',
-        version: '1.0',
-        fixedVersion: 'Environment Var',
-        riskScore: 95,
-        status: 'Active',
-        description: 'Hardcoded AWS Access Key ID detected in source code repository.',
-        cvssScore: 9.8,
-        exploitability: '0.95',
-        productionStatus: 'Yes',
-        affectedFiles: [fileName],
-        recommendedFix: 'Store credentials in environment variables or AWS Secrets Manager.',
-        aiExplanation: 'Exposed AWS credentials allow unauthorized attackers to access cloud infrastructure resources.',
-        lineNumber: lineNum,
-        tool: 'Secret Detection',
-        codeSnippet: lineText.trim()
-      });
-    }
-
-    // Stripe Secret Key
-    if (/sk_live_[0-9a-zA-Z]{24,}/.test(lineText)) {
-      const match = lineText.match(/sk_live_[0-9a-zA-Z]{24,}/)?.[0] || 'sk_live_123456';
-      secrets.push({
-        id: `sec-${Date.now()}-${idx}`,
-        type: 'Stripe Secret API Key',
-        maskedSecret: `sk_live_************XXXX`,
-        rawSecret: match,
-        filePath: fileName,
-        line: lineNum,
-        confidence: 'HIGH',
-        status: 'Active',
-        timestamp: new Date().toLocaleString(),
-        repo: 'code-scan-target'
-      });
-    }
-
-    // SQL Injection Pattern
-    if (/SELECT\s+.*\s+FROM\s+.*(\+|\$|\%s).*$/i.test(lineText) || /WHERE\s+.*=\s*\+/i.test(lineText)) {
-      findings.push({
-        id: `f-sqli-${idx}`,
-        cve: 'CWE-89',
-        title: 'Raw SQL Injection via String Concatenation',
-        severity: 'critical',
-        priority: 'Critical',
-        package: 'Database Query',
-        version: 'N/A',
-        fixedVersion: 'Parameterized Query',
-        riskScore: 92,
-        status: 'Active',
-        description: 'SQL Injection Risk: Raw SQL query constructed via string concatenation.',
-        cvssScore: 9.0,
-        exploitability: '0.90',
-        productionStatus: 'Yes',
-        affectedFiles: [fileName],
-        recommendedFix: 'Use parameterized queries or ORM prepared statements instead of string concatenation.',
-        aiExplanation: 'SQL injection allows attackers to manipulate database queries and bypass authentication.',
-        lineNumber: lineNum,
-        tool: 'Code Scanner',
-        codeSnippet: lineText.trim()
-      });
-    }
-
-    // Unsafe eval() / RCE
-    if (/\beval\s*\(/.test(lineText) || /exec\s*\(/.test(lineText) || /os\.system\s*\(/.test(lineText)) {
-      findings.push({
-        id: `f-rce-${idx}`,
-        cve: 'CWE-95',
-        title: 'Unsafe Dynamic Code Execution (eval/exec)',
-        severity: 'high',
-        priority: 'High',
-        package: 'Dynamic Execution',
-        version: 'N/A',
-        fixedVersion: 'Safe Function Call',
-        riskScore: 85,
-        status: 'Active',
-        description: 'Unsafe dynamic code execution (`eval()` / `exec()` / `os.system()`).',
-        cvssScore: 8.5,
-        exploitability: '0.85',
-        productionStatus: 'Yes',
-        affectedFiles: [fileName],
-        recommendedFix: 'Avoid dynamic code execution. Parse inputs safely using standard data parsers.',
-        aiExplanation: 'Passing unmanaged strings to dynamic code evaluators leads to arbitrary Remote Code Execution.',
-        lineNumber: lineNum,
-        tool: 'Code Scanner',
-        codeSnippet: lineText.trim()
-      });
-    }
-
-    // Hardcoded Secret
-    if (/(password|passwd|secret|jwt_token)\s*[:=]\s*["'][^"']+["']/i.test(lineText) && !lineText.includes('process.env')) {
-      findings.push({
-        id: `f-pass-${idx}`,
-        cve: 'CWE-259',
-        title: 'Hardcoded Password or Secret String',
-        severity: 'medium',
-        priority: 'Medium',
-        package: 'Authentication',
-        version: '1.0',
-        fixedVersion: 'Environment Var',
-        riskScore: 68,
-        status: 'Active',
-        description: 'Hardcoded secret or password string detected.',
-        cvssScore: 6.5,
-        exploitability: '0.65',
-        productionStatus: 'Yes',
-        affectedFiles: [fileName],
-        recommendedFix: 'Extract password strings to encrypted configuration files or environment variables.',
-        aiExplanation: 'Hardcoded secrets in repository files compromise application credential hygiene.',
-        lineNumber: lineNum,
-        tool: 'Code Scanner',
-        codeSnippet: lineText.trim()
-      });
-    }
-  });
-
-  // Dependency Scanning
-  if (fileName.includes('package.json') || sourceText.includes('"express"')) {
-    trivyResults.push({
-      package: 'express',
-      version: '4.16.0',
-      cve: 'CVE-2022-24999',
-      severity: 'high',
-      fixedVersion: '4.17.3',
-      recommendation: 'Upgrade express to >= 4.17.3 to resolve prototype pollution vulnerability.'
-    });
-    findings.push({
-      id: `f-trivy-exp`,
-      cve: 'CVE-2022-24999',
-      title: 'express: Prototype Pollution Vulnerability',
-      severity: 'high',
-      priority: 'High',
-      package: 'express',
-      version: '4.16.0',
-      fixedVersion: '4.17.3',
-      riskScore: 78,
-      status: 'Fix Available',
-      description: 'Prototype pollution vulnerability in express / qs dependency.',
-      cvssScore: 7.5,
-      exploitability: '0.75',
-      productionStatus: 'Yes',
-      affectedFiles: [fileName],
-      recommendedFix: 'Upgrade express package to 4.17.3 in package.json.',
-      aiExplanation: 'Allows remote attackers to inject property modifications into global JavaScript object prototypes.',
-      lineNumber: 1,
-      tool: 'Trivy SCA'
-    });
-  }
-
-  // Dockerfile Analysis
-  if (fileName.toLowerCase().includes('dockerfile') || sourceText.includes('FROM ')) {
-    if (sourceText.includes('USER root') || !sourceText.includes('USER ')) {
-      findings.push({
-        id: `f-docker-root`,
-        cve: 'CIS-Docker-4.1',
-        title: 'Container Running as Root User',
-        severity: 'medium',
-        priority: 'Medium',
-        package: 'Dockerfile Config',
-        version: 'N/A',
-        fixedVersion: 'USER appuser',
-        riskScore: 62,
-        status: 'Active',
-        description: 'Container build configured to execute as root user.',
-        cvssScore: 6.0,
-        exploitability: '0.60',
-        productionStatus: 'Yes',
-        affectedFiles: [fileName],
-        recommendedFix: 'Create a non-privileged system user in Dockerfile (`RUN adduser -D appuser && USER appuser`).',
-        aiExplanation: 'Running containers as root increases container breakout impact on the host system.',
-        lineNumber: 1,
-        tool: 'Container Scan'
-      });
-    }
-  }
-
-  // Default fallback finding if clean
-  if (findings.length === 0) {
-    findings.push({
-      id: `f-info-1`,
-      cve: 'INFO-001',
-      title: 'Informational Security Audit Notice',
-      severity: 'low',
-      priority: 'Low',
-      package: 'Code Quality',
-      version: '1.0',
-      fixedVersion: 'N/A',
-      riskScore: 25,
-      status: 'Active',
-      description: 'Minor code quality suggestion: ensure input validation sanitization is enforced.',
-      cvssScore: 2.5,
-      exploitability: '0.10',
-      productionStatus: 'Yes',
-      affectedFiles: [fileName],
-      recommendedFix: 'Add automated unit testing for boundary cases.',
-      aiExplanation: 'No critical security vulnerabilities or exposed secrets detected in the submitted source snippet.',
-      lineNumber: 1,
-      tool: 'Code Scanner'
-    });
-  }
-
-  // Calculate Security Score
-  const crit = findings.filter(f => f.severity === 'critical').length;
-  const high = findings.filter(f => f.severity === 'high').length;
-  const med = findings.filter(f => f.severity === 'medium').length;
-  const low = findings.filter(f => f.severity === 'low').length;
-
-  let computedScore = 100 - (crit * 25 + high * 15 + med * 8 + low * 3 + secrets.length * 15);
-  computedScore = Math.max(10, Math.min(100, computedScore));
-
-  let riskLevel: CodeScanResponse['riskLevel'] = 'EXCELLENT';
-  if (computedScore < 25) riskLevel = 'CRITICAL RISK';
-  else if (computedScore < 50) riskLevel = 'HIGH RISK';
-  else if (computedScore < 75) riskLevel = 'MODERATE RISK';
-  else if (computedScore < 90) riskLevel = 'GOOD';
-
-  const recommendedFixesList: string[] = findings
-    .map(f => f.recommendedFix || 'Apply routine package updates.')
-    .filter((fix): fix is string => Boolean(fix));
+  // Secrets are the subset of findings produced by the secret scanner. They are
+  // derived from real backend findings; nothing is invented, and secret values
+  // are never reconstructed client-side (the backend redacts them).
+  const secrets: SecretItem[] = findings
+    .filter((finding) => finding.tool === 'Secret Detection')
+    .map((finding, idx) => ({
+      id: `${data.scan_id}-secret-${idx}`,
+      type: finding.cve || 'Secret',
+      maskedSecret: 'Redacted by Rakshak',
+      rawSecret: '',
+      filePath: finding.affectedFiles[0] || '',
+      line: finding.lineNumber ?? 0,
+      confidence: 'HIGH',
+      status: finding.status,
+      timestamp: new Date().toLocaleString(),
+      repo: targetPath,
+    }));
 
   return {
-    scanId,
-    score: computedScore,
-    riskLevel,
-    totalFindings: findings.length,
-    criticalCount: crit,
-    highCount: high,
-    mediumCount: med,
-    lowCount: low,
+    scanId: data.scan_id,
+    targetPath: data.target_path || targetPath,
+    score,
+    riskLevel: riskLevelFor(score),
+    totalFindings: data.total_findings ?? findings.length,
+    criticalCount: data.critical ?? 0,
+    highCount: data.high ?? 0,
+    mediumCount: data.medium ?? 0,
+    lowCount: data.low ?? 0,
     secretsCount: secrets.length,
-    vulnerableDependenciesCount: trivyResults.length,
+    vulnerableDependenciesCount: findings.filter((f) => f.tool === 'Trivy SCA').length,
     findings,
     secrets,
-    trivyResults,
-    aiAnalysis: {
-      summary: crit > 0 
-        ? `Critical security risks detected in ${fileName}. ${crit} critical vulnerability requires immediate remediation to prevent remote code execution or credential theft.`
-        : `Security scan complete for ${fileName}. Code posture is moderate with minor risk areas identified.`,
-      mostDangerousIssues: findings.map(f => `${f.cve}: ${f.description}`),
-      whyItMatters: `Unpatched security flaws in production code allow malicious attackers to compromise application integrity, gain unauthorized access, and breach confidential user data.`,
-      recommendedFixes: recommendedFixesList,
-      secureCodeSuggestions: `Always use parameterized database interfaces, isolate secrets into environment variables, and regularly update third-party dependencies via automated Trivy security scans.`
-    }
   };
 }

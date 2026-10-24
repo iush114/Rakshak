@@ -1,4 +1,4 @@
-import { formatScore, formatCount, formatDuration } from '@/utils/formatters';
+import { CLEAN_BASE } from '@/services/api';
 import { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -29,11 +29,11 @@ import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { useSecurity } from '@/context/SecurityContext';
-import {
-  scanGitHubRepository,
-  API_BASE_URL,
-  type GitHubRepo,
-  type GitHubScanResponse
+import { 
+  scanGitHubRepository, 
+  API_BASE_URL, 
+  type GitHubRepo, 
+  type GitHubScanResponse 
 } from '@/services/api';
 
 export default function RepositoryScan() {
@@ -60,12 +60,12 @@ export default function RepositoryScan() {
   const [repoSearch, setRepoSearch] = useState('');
   const [languageFilter, setLanguageFilter] = useState('all');
 
-  // Scan Checkboxes Options State (Default: Code, Dependency, Secret ON; Container OFF)
+  // Scan Checkboxes Options State (Default: Code, Dependency, Secret, Container ON)
   const [scanOptions, setScanOptions] = useState({
     codeScanning: true,
     dependencyScanning: true,
     secretDetection: true,
-    containerScanning: false,
+    containerScanning: true,
   });
   const [containerImage, setContainerImage] = useState('');
 
@@ -80,12 +80,12 @@ export default function RepositoryScan() {
   const filteredRepos = useMemo(() => {
     return gitHubRepos.filter(repo => {
       const q = repoSearch.toLowerCase().trim();
-      const matchesSearch = !q ||
-        repo.name.toLowerCase().includes(q) ||
+      const matchesSearch = !q || 
+        repo.name.toLowerCase().includes(q) || 
         repo.owner.toLowerCase().includes(q) ||
         (repo.description && repo.description.toLowerCase().includes(q));
-
-      const matchesLang = languageFilter === 'all' ||
+      
+      const matchesLang = languageFilter === 'all' || 
         (repo.language && repo.language.toLowerCase() === languageFilter.toLowerCase());
 
       return matchesSearch && matchesLang;
@@ -142,7 +142,8 @@ export default function RepositoryScan() {
         container_image: scanOptions.containerScanning ? containerImage.trim() : null,
       });
 
-      const durationStr = formatDuration((performance.now() - startTime) / 1000, 2);
+      const elapsedSec = ((performance.now() - startTime) / 1000).toFixed(1);
+      const durationStr = `${elapsedSec}s`;
       setScanDuration(durationStr);
       setLastScanResult(response);
       setScanCompleted(true);
@@ -207,7 +208,7 @@ export default function RepositoryScan() {
             className="flex items-center gap-2 text-xs border-border/60 hover:border-pinkAccent"
           >
             <ShieldAlert size={15} className="text-pinkAccent" />
-            <span>View All Findings ({formatCount(summary?.total_findings ?? findings.length)})</span>
+            <span>View All Findings ({summary?.total_findings ?? findings.length})</span>
           </Button>
 
           <Button
@@ -227,7 +228,7 @@ export default function RepositoryScan() {
         <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between gap-3 text-xs text-amber-200">
           <div className="flex items-center gap-2 font-medium">
             <AlertTriangle className="text-amber-400 shrink-0" size={18} />
-            <span>Unable to connect to Rakshak backend (http://127.0.0.1:8000). Please verify the FastAPI server is running.</span>
+            <span>Unable to connect to Rakshak backend ({CLEAN_BASE}). Please verify the FastAPI server is running.</span>
           </div>
           <Button
             size="sm"
@@ -275,8 +276,8 @@ export default function RepositoryScan() {
       {isGithubConnected && currentUser && (
         <div className="p-4 rounded-2xl bg-[#090014]/90 border border-neonPurple/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
           <div className="flex items-center gap-3.5">
-            <img
-              src={currentUser.avatar_url || 'https://github.com/identicons/user.png'}
+            <img 
+              src={currentUser.avatar_url || 'https://github.com/identicons/user.png'} 
               alt={currentUser.login}
               className="w-10 h-10 rounded-full border-2 border-neonPurple/60 shadow-md"
             />
@@ -311,7 +312,7 @@ export default function RepositoryScan() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => window.open(currentUser.html_url, '_blank')}
+              onClick={() => window.open(currentUser.html_url || 'https://github.com', '_blank')}
               className="text-xs border-border/60 text-textSecondary hover:text-white flex items-center gap-1.5"
             >
               <span>GitHub Profile</span>
@@ -391,7 +392,7 @@ export default function RepositoryScan() {
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-h-[460px] overflow-y-auto pr-1">
                 {filteredRepos.map((repo: GitHubRepo) => {
-                  const isSelected = selectedGitHubRepo?.id === repo.id ||
+                  const isSelected = selectedGitHubRepo?.id === repo.id || 
                     (selectedGitHubRepo?.owner === repo.owner && selectedGitHubRepo?.name === repo.name);
 
                   return (
@@ -651,7 +652,7 @@ export default function RepositoryScan() {
               </div>
             </div>
 
-            {/* 4. Container Scanning (Default OFF) */}
+            {/* 4. Container Scanning */}
             <div className={`p-4 rounded-xl border transition-all space-y-3 flex flex-col justify-between ${
               scanOptions.containerScanning ? 'bg-[#090014] border-blue-400/60 glow-neon' : 'bg-[#090014]/50 border-border/40 opacity-70'
             }`}>
@@ -672,7 +673,7 @@ export default function RepositoryScan() {
               </div>
               <div className="flex items-center justify-between border-t border-border/30 pt-2">
                 <span className="text-[10px] font-mono text-success font-semibold">
-                  {scanOptions.containerScanning ? '✓ Enabled' : 'Default OFF'}
+                  {scanOptions.containerScanning ? '✓ Enabled' : 'Disabled'}
                 </span>
                 <span className="text-[10px] font-mono text-blue-400">Docker SCA</span>
               </div>
@@ -733,7 +734,7 @@ export default function RepositoryScan() {
       {isScanning && selectedGitHubRepo && (
         <Card className="bg-[#12051F]/95 border-[#A855F7]/40 shadow-2xl p-8 backdrop-blur-xl animate-in fade-in duration-300">
           <div className="max-w-2xl mx-auto space-y-6 text-center">
-
+            
             <div className="relative w-24 h-24 mx-auto flex items-center justify-center">
               <div className="absolute inset-0 rounded-full border-2 border-neonPurple/40 animate-ping opacity-75" />
               <div className="w-20 h-20 rounded-full bg-gradient-to-br from-[#7c3aed] to-[#ec4899] p-[2px] glow-neon">
@@ -781,7 +782,7 @@ export default function RepositoryScan() {
       {/* 8. SCAN COMPLETED RESULTS */}
       {scanCompleted && lastScanResult && !isScanning && (
         <Card className="bg-gradient-to-br from-[#12051F] via-[#1a082e] to-[#250a3e] border-success/40 glow-neon p-6 space-y-6 animate-in fade-in duration-300">
-
+          
           {/* Header Banner */}
           <div className="flex flex-col md:flex-row items-start md:items-center justify-between border-b border-[#2A1240] pb-6 gap-4">
             <div className="flex items-center gap-4">
@@ -839,7 +840,7 @@ export default function RepositoryScan() {
                   <span>Security Vulnerabilities Breakdown</span>
                 </h4>
                 <Badge variant="critical" className="font-mono text-xs px-3 py-0.5">
-                  {formatCount(lastScanResult.total_findings)} Total Findings
+                  {lastScanResult.total_findings} Total Findings
                 </Badge>
               </div>
 
@@ -847,7 +848,7 @@ export default function RepositoryScan() {
                 <div className="p-3.5 rounded-xl bg-danger/10 border border-danger/30">
                   <span className="text-[10px] font-bold uppercase text-danger block">Critical</span>
                   <span className="text-2xl font-black text-danger font-mono mt-0.5 block">
-                    {formatCount(lastScanResult.critical)}
+                    {lastScanResult.critical}
                   </span>
                   <span className="text-[10px] text-textSecondary mt-0.5 block">Immediate Action</span>
                 </div>
@@ -855,7 +856,7 @@ export default function RepositoryScan() {
                 <div className="p-3.5 rounded-xl bg-pinkAccent/10 border border-pinkAccent/30">
                   <span className="text-[10px] font-bold uppercase text-pinkAccent block">High</span>
                   <span className="text-2xl font-black text-pinkAccent font-mono mt-0.5 block">
-                    {formatCount(lastScanResult.high)}
+                    {lastScanResult.high}
                   </span>
                   <span className="text-[10px] text-textSecondary mt-0.5 block">High Priority</span>
                 </div>
@@ -863,7 +864,7 @@ export default function RepositoryScan() {
                 <div className="p-3.5 rounded-xl bg-warning/10 border border-warning/30">
                   <span className="text-[10px] font-bold uppercase text-warning block">Medium</span>
                   <span className="text-2xl font-black text-warning font-mono mt-0.5 block">
-                    {formatCount(lastScanResult.medium)}
+                    {lastScanResult.medium}
                   </span>
                   <span className="text-[10px] text-textSecondary mt-0.5 block">Medium Risk</span>
                 </div>
@@ -871,7 +872,7 @@ export default function RepositoryScan() {
                 <div className="p-3.5 rounded-xl bg-neonPurple/10 border border-neonPurple/30">
                   <span className="text-[10px] font-bold uppercase text-neonPurple block">Low</span>
                   <span className="text-2xl font-black text-neonPurple font-mono mt-0.5 block">
-                    {formatCount(lastScanResult.low)}
+                    {lastScanResult.low}
                   </span>
                   <span className="text-[10px] text-textSecondary mt-0.5 block">Low Impact</span>
                 </div>
@@ -886,7 +887,7 @@ export default function RepositoryScan() {
                 </span>
                 <div className="mt-3 flex items-center justify-center gap-2">
                   <span className="text-4xl font-black text-warning font-mono">
-                    {formatScore(lastScanResult.overall_risk)} / 100
+                    {lastScanResult.overall_risk} / 100
                   </span>
                 </div>
                 <div className="mt-2">
@@ -897,9 +898,9 @@ export default function RepositoryScan() {
               </div>
 
               <div className="w-full bg-border/40 h-2 rounded-full mt-4 overflow-hidden">
-                <div
-                  className="h-full bg-warning rounded-full transition-all duration-500"
-                  style={{ width: `${Math.min(100, Math.max(5, lastScanResult.overall_risk))}%` }}
+                <div 
+                  className="h-full bg-warning rounded-full transition-all duration-500" 
+                  style={{ width: `${Math.min(100, Math.max(5, lastScanResult.overall_risk))}%` }} 
                 />
               </div>
             </div>

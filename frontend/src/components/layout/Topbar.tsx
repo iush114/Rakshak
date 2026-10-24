@@ -1,31 +1,28 @@
-import { formatCount } from '@/utils/formatters';
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   Bell,
   Search,
   User,
   Menu,
-  CheckCircle2,
+  CheckCheck,
   AlertTriangle,
   ShieldAlert,
+  Info,
   Sparkles,
-  SearchCode,
-  XCircle,
-  Check,
   Loader2,
+  X
 } from 'lucide-react';
 import { GithubIcon as Github } from '@/components/ui/GithubIcon';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { useSecurity } from '@/context/SecurityContext';
-import { API_BASE_URL } from '@/services/api';
 import { useNavigate } from 'react-router-dom';
 import {
   getNotifications,
-  markNotificationRead,
-  markAllNotificationsRead,
-  type NotificationItem,
+  markNotificationAsRead,
+  markAllNotificationsAsRead,
+  type NotificationItem
 } from '@/services/api';
 
 interface TopbarProps {
@@ -33,167 +30,110 @@ interface TopbarProps {
   isSidebarCollapsed?: boolean;
 }
 
-function formatRelativeTime(dateString: string): string {
-  try {
-    const date = new Date(dateString);
-    const now = new Date();
-    const diffMs = now.getTime() - date.getTime();
-    const diffSec = Math.floor(diffMs / 1000);
-    const diffMin = Math.floor(diffSec / 60);
-    const diffHr = Math.floor(diffMin / 60);
-    const diffDays = Math.floor(diffHr / 24);
-
-    if (diffSec < 45) return 'Just now';
-    if (diffMin < 60) return `${diffMin}m ago`;
-    if (diffHr < 24) return `${diffHr}h ago`;
-    if (diffDays < 7) return `${diffDays}d ago`;
-    return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-  } catch {
-    return 'Recently';
-  }
-}
-
-function getNotificationIcon(type: string, severity?: string | null) {
-  switch (type) {
-    case 'critical_finding':
-      return {
-        icon: ShieldAlert,
-        colorClass: 'text-red-400 bg-red-500/10 border-red-500/30',
-        label: 'Critical Alert',
-      };
-    case 'high_finding':
-      return {
-        icon: AlertTriangle,
-        colorClass: 'text-amber-400 bg-amber-500/10 border-amber-500/30',
-        label: 'High Severity',
-      };
-    case 'new_finding':
-      return {
-        icon: Sparkles,
-        colorClass: 'text-neonPurple bg-neonPurple/10 border-neonPurple/30',
-        label: 'New Finding',
-      };
-    case 'fixed_finding':
-      return {
-        icon: CheckCircle2,
-        colorClass: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30',
-        label: 'Resolved',
-      };
-    case 'scan_failed':
-      return {
-        icon: XCircle,
-        colorClass: 'text-red-400 bg-red-500/10 border-red-500/30',
-        label: 'Scan Failed',
-      };
-    case 'scan_completed':
-    default:
-      if (severity === 'critical') {
-        return {
-          icon: ShieldAlert,
-          colorClass: 'text-red-400 bg-red-500/10 border-red-500/30',
-          label: 'Scan Alert',
-        };
-      }
-      return {
-        icon: SearchCode,
-        colorClass: 'text-cyan-400 bg-cyan-500/10 border-cyan-500/30',
-        label: 'Scan Complete',
-      };
-  }
-}
-
 export default function Topbar({ onToggleMobileMenu, isSidebarCollapsed = false }: TopbarProps) {
   const navigate = useNavigate();
-  const { selectedGitHubRepo, selectedRepo, isGithubConnected, currentUser, gitHubUser } = useSecurity();
+  const { selectedGitHubRepo, selectedRepo, isGithubConnected, currentUser } = useSecurity();
   const [searchTerm, setSearchTerm] = useState('');
-  const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
+
+  // Notification Bell States
+  const [isNotificationOpen, setIsNotificationOpen] = useState(false);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
-  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [unreadCount, setUnreadCount] = useState<number>(0);
+  const [isLoadingNotifications, setIsLoadingNotifications] = useState(false);
   const notificationRef = useRef<HTMLDivElement>(null);
 
-  // Load and apply notification preferences from localStorage
-  const filterNotifications = useCallback((rawList: NotificationItem[]) => {
-    const inAppAlerts = localStorage.getItem('rakshak_inapp_notifications') !== 'false';
-    const criticalOnly = localStorage.getItem('rakshak_notifications_critical_only') === 'true';
-    const scanNotices = localStorage.getItem('rakshak_scan_notices') !== 'false';
+  // Neon Effect Toggle State (synchronized with localStorage and Settings)
+  const [isNeonEnabled, setIsNeonEnabled] = useState<boolean>(() => {
+    return localStorage.getItem('rakshak_glow_effects') !== 'false';
+  });
 
-    return rawList.filter((item) => {
-      // Scan failure is always shown
-      if (item.notification_type === 'scan_failed') return true;
-
-      // Scan completion notice filtering
-      if (item.notification_type === 'scan_completed') {
-        return scanNotices;
+  // Listen for neon changes from Settings page or elsewhere
+  useEffect(() => {
+    const handleGlowChange = (e: Event) => {
+      const customEvent = e as CustomEvent<{ enabled: boolean }>;
+      if (customEvent.detail && typeof customEvent.detail.enabled === 'boolean') {
+        setIsNeonEnabled(customEvent.detail.enabled);
+      } else {
+        setIsNeonEnabled(localStorage.getItem('rakshak_glow_effects') !== 'false');
       }
+    };
 
-      // Finding notifications filtering
-      if (['critical_finding', 'high_finding', 'new_finding', 'fixed_finding'].includes(item.notification_type)) {
-        if (!inAppAlerts) return false;
-        if (criticalOnly) {
-          return item.severity === 'critical' || item.severity === 'high' || item.notification_type === 'critical_finding' || item.notification_type === 'high_finding';
-        }
-        return true;
-      }
-
-      return true;
-    });
+    window.addEventListener('rakshak-glow-changed', handleGlowChange);
+    return () => window.removeEventListener('rakshak-glow-changed', handleGlowChange);
   }, []);
 
-  const fetchNotificationData = useCallback(async () => {
-    if (!currentUser && !isGithubConnected) {
-      setNotifications([]);
-      return;
-    }
+  // Quick Neon Toggle Handler
+  const handleToggleNeon = () => {
+    const nextState = !isNeonEnabled;
+    setIsNeonEnabled(nextState);
+    localStorage.setItem('rakshak_glow_effects', String(nextState));
+    document.documentElement.setAttribute('data-glow', nextState ? 'true' : 'false');
+    document.documentElement.setAttribute('data-neon', nextState ? 'true' : 'false');
+    window.dispatchEvent(new CustomEvent('rakshak-glow-changed', { detail: { enabled: nextState } }));
+  };
+
+  // Fetch Notifications from Backend
+  const fetchNotifications = async () => {
     try {
-      setIsLoading(true);
-      const data = await getNotifications(30);
-      setNotifications(data.notifications || []);
-    } catch (err: any) {
-      if (err?.status === 401) {
-        setNotifications([]);
-      }
+      setIsLoadingNotifications(true);
+      const res = await getNotifications();
+      setNotifications(res.notifications || []);
+      setUnreadCount(res.unread_count ?? 0);
+    } catch (err) {
+      console.warn('[Rakshak Topbar] Failed to fetch notifications:', err);
     } finally {
-      setIsLoading(false);
+      setIsLoadingNotifications(false);
     }
-  }, [currentUser, isGithubConnected]);
+  };
 
-  // Initial fetch and 30-second polling interval (enabled ONLY for authenticated sessions)
+  // Initial fetch on mount & poll every 60s
   useEffect(() => {
-    if (!currentUser && !isGithubConnected) {
-      setNotifications([]);
-      return;
-    }
-
-    fetchNotificationData();
-
-    const interval = setInterval(() => {
-      fetchNotificationData();
-    }, 30000);
-
+    fetchNotifications();
+    const interval = setInterval(fetchNotifications, 60000);
     return () => clearInterval(interval);
-  }, [currentUser, isGithubConnected, fetchNotificationData]);
+  }, []);
 
-  // Refresh when notification popover opens
-  useEffect(() => {
-    if (isNotificationsOpen && (currentUser || isGithubConnected)) {
-      fetchNotificationData();
+  // Handle Mark Single Notification as Read
+  const handleMarkRead = async (id: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      setNotifications(prev => prev.map(n => n.id === id ? { ...n, is_read: true } : n));
+      setUnreadCount(prev => Math.max(0, prev - 1));
+      const res = await markNotificationAsRead(id);
+      setUnreadCount(res.unread_count);
+    } catch (err) {
+      console.warn('[Rakshak Topbar] Failed to mark read:', err);
+      fetchNotifications();
     }
-  }, [isNotificationsOpen, currentUser, isGithubConnected, fetchNotificationData]);
+  };
 
-  // Close notifications dropdown on click outside or Escape
+  // Handle Mark All as Read
+  const handleMarkAllRead = async () => {
+    try {
+      setNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
+      setUnreadCount(0);
+      await markAllNotificationsAsRead();
+    } catch (err) {
+      console.warn('[Rakshak Topbar] Failed to mark all read:', err);
+      fetchNotifications();
+    }
+  };
+
+  // Close notification popover on outside click and Escape key
   useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (notificationRef.current && !notificationRef.current.contains(e.target as Node)) {
-        setIsNotificationsOpen(false);
-      }
-    };
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setIsNotificationsOpen(false);
+    const handleClickOutside = (event: MouseEvent) => {
+      if (notificationRef.current && !notificationRef.current.contains(event.target as Node)) {
+        setIsNotificationOpen(false);
       }
     };
 
-    if (isNotificationsOpen) {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsNotificationOpen(false);
+      }
+    };
+
+    if (isNotificationOpen) {
       document.addEventListener('mousedown', handleClickOutside);
       document.addEventListener('keydown', handleKeyDown);
     }
@@ -201,7 +141,7 @@ export default function Topbar({ onToggleMobileMenu, isSidebarCollapsed = false 
       document.removeEventListener('mousedown', handleClickOutside);
       document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isNotificationsOpen]);
+  }, [isNotificationOpen]);
 
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -210,52 +150,33 @@ export default function Topbar({ onToggleMobileMenu, isSidebarCollapsed = false 
     }
   };
 
-  const handleNotificationClick = async (notif: NotificationItem) => {
-    if (!notif.is_read) {
-      try {
-        await markNotificationRead(notif.id);
-        setNotifications((prev) =>
-          prev.map((n) => (n.id === notif.id ? { ...n, is_read: true } : n))
-        );
-      } catch {
-        // Continue navigation even if read-mark fails
-      }
-    }
-    setIsNotificationsOpen(false);
-
-    if (notif.scan_id) {
-      navigate(`/scan-history/${encodeURIComponent(notif.scan_id)}`);
-    } else if (notif.finding_id) {
-      navigate(`/findings?search=${encodeURIComponent(notif.finding_id)}`);
-    } else {
-      navigate('/findings');
-    }
-  };
-
-  const handleMarkAllAsRead = async () => {
-    try {
-      await markAllNotificationsRead();
-      setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })));
-    } catch {
-      // Graceful error
-    }
-  };
-
   const activeRepoName = selectedGitHubRepo
     ? `${selectedGitHubRepo.owner}/${selectedGitHubRepo.name}`
     : (selectedRepo?.name || 'No Repository');
 
-  const visibleNotifications = filterNotifications(notifications);
-  const visibleUnreadCount = visibleNotifications.filter((n) => !n.is_read).length;
+  // Severity Icon Helper
+  const getSeverityIcon = (sev: string) => {
+    switch (sev?.toLowerCase()) {
+      case 'critical':
+        return <ShieldAlert size={16} className="text-red-400 shrink-0" />;
+      case 'high':
+        return <AlertTriangle size={16} className="text-amber-400 shrink-0" />;
+      case 'medium':
+        return <Info size={16} className="text-cyan-400 shrink-0" />;
+      default:
+        return <Bell size={16} className="text-[#A855F7] shrink-0" />;
+    }
+  };
 
   return (
-    <header className="h-16 shrink-0 bg-card border-b border-border flex items-center justify-between px-4 sm:px-6 sticky top-0 z-30">
+    <header className="h-16 shrink-0 bg-card border-b border-border flex items-center justify-between px-4 sm:px-6 sticky top-0 z-30 font-sans">
 
       {/* Left: Mobile Menu Toggle & Search Bar */}
       <div className={`flex items-center gap-3 w-full max-w-md ${isSidebarCollapsed ? 'md:pl-16' : ''}`}>
         <button
           onClick={onToggleMobileMenu}
-          className="md:hidden p-2 rounded-lg bg-background border border-border text-textSecondary hover:text-white"
+          className="md:hidden p-2 rounded-lg bg-background border border-border text-textSecondary hover:text-white cursor-pointer"
+          aria-label="Toggle mobile navigation"
         >
           <Menu size={20} />
         </button>
@@ -272,14 +193,15 @@ export default function Topbar({ onToggleMobileMenu, isSidebarCollapsed = false 
         </form>
       </div>
 
-      {/* Right: Active Repository Status, Notification & User Avatar */}
-      <div className="flex items-center gap-3 shrink-0">
+      {/* Right Controls: Connected Repo, Neon Toggle, Notifications, User */}
+      <div className="flex items-center gap-2.5 sm:gap-3 shrink-0">
 
         {/* Connected Repository Pill */}
-        {isGithubConnected && (selectedGitHubRepo || selectedRepo) && (
+        {isGithubConnected && (
           <div
             onClick={() => navigate('/repositories')}
             className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-xl bg-background border border-border/80 text-xs hover:border-neonPurple/50 transition-all cursor-pointer"
+            title="Active Repository Workspace"
           >
             <Github size={15} className="text-neonPurple" />
             <span className="font-mono font-bold text-white max-w-[150px] truncate">{activeRepoName}</span>
@@ -289,173 +211,184 @@ export default function Topbar({ onToggleMobileMenu, isSidebarCollapsed = false 
           </div>
         )}
 
-        {/* Notification Bell with Popover Dropdown */}
+        {/* Neon Effect ON/OFF Toggle */}
+        <button
+          type="button"
+          onClick={handleToggleNeon}
+          className={`h-9 px-2.5 sm:px-3 rounded-xl border text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer select-none ${
+            isNeonEnabled
+              ? 'bg-[#12051F] border-[#A855F7]/60 text-white shadow-[0_0_15px_rgba(168,85,247,0.35)]'
+              : 'bg-background border-border text-zinc-400 hover:text-zinc-200'
+          }`}
+          title={`Neon Glow Effects: ${isNeonEnabled ? 'ON (Click to turn OFF)' : 'OFF (Click to turn ON)'}`}
+          aria-label="Toggle Neon Glow Effects"
+        >
+          <Sparkles size={14} className={isNeonEnabled ? 'text-[#00f2fe] animate-pulse' : 'text-zinc-500'} />
+          <span className="hidden sm:inline text-[11px] font-mono">
+            NEON: {isNeonEnabled ? 'ON' : 'OFF'}
+          </span>
+        </button>
+
+        {/* Notification Bell Dropdown Container */}
         <div className="relative" ref={notificationRef}>
           <Button
             variant="outline"
             size="icon"
-            onClick={() => setIsNotificationsOpen((prev) => !prev)}
-            aria-expanded={isNotificationsOpen}
-            aria-haspopup="true"
-            aria-label="Notifications"
-            className={`relative bg-background border-border text-textSecondary hover:text-foreground h-9 w-9 rounded-xl cursor-pointer transition-colors ${
-              isNotificationsOpen ? 'border-neonPurple text-white' : ''
+            onClick={() => {
+              setIsNotificationOpen(prev => !prev);
+              if (!isNotificationOpen) fetchNotifications();
+            }}
+            className={`relative bg-background border-border hover:text-foreground h-9 w-9 rounded-xl transition-all cursor-pointer ${
+              isNotificationOpen ? 'border-neonPurple text-white shadow-[0_0_15px_rgba(168,85,247,0.3)]' : 'text-textSecondary'
             }`}
+            aria-label="Security notifications"
+            aria-expanded={isNotificationOpen}
           >
             <Bell size={16} />
-            {visibleUnreadCount > 0 && (
-              <span className="absolute -top-1 -right-1 flex h-4 min-w-4 px-1 items-center justify-center rounded-full bg-pinkAccent text-[9px] font-bold text-white ring-2 ring-background animate-in zoom-in-50">
-                {visibleUnreadCount > 9 ? '9+' : formatCount(visibleUnreadCount)}
+            {unreadCount > 0 && (
+              <span className="absolute -top-1 -right-1 px-1.5 py-0.2 min-w-[18px] h-[18px] bg-danger text-white text-[10px] font-bold rounded-full flex items-center justify-center shadow-[0_0_10px_rgba(239,68,68,0.8)] animate-pulse">
+                {unreadCount > 9 ? '9+' : unreadCount}
               </span>
             )}
           </Button>
 
-          {isNotificationsOpen && (
-            <div className="absolute right-0 top-12 w-80 sm:w-96 rounded-2xl bg-[#12051F] border border-[#2A1240] shadow-2xl z-50 p-4 animate-in fade-in zoom-in-95 duration-150 font-sans">
-              <div className="flex items-center justify-between pb-3 border-b border-[#2A1240]">
+          {/* Notification Popover Panel */}
+          {isNotificationOpen && (
+            <div className="absolute right-0 top-12 w-80 sm:w-96 rounded-2xl bg-[#090014]/95 border border-[#2A1240] backdrop-blur-xl shadow-[0_0_40px_rgba(0,0,0,0.8)] z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+
+              {/* Header */}
+              <div className="p-4 border-b border-[#2A1240] flex items-center justify-between bg-[#12051F]/80">
                 <div className="flex items-center gap-2">
-                  <Bell size={15} className="text-neonPurple" />
-                  <span className="font-bold text-white text-xs">Notifications</span>
-                  {isLoading && <Loader2 size={12} className="animate-spin text-textSecondary" />}
+                  <Bell size={16} className="text-[#A855F7]" />
+                  <h4 className="text-xs font-bold text-white uppercase tracking-wider">
+                    Notifications
+                  </h4>
+                  {unreadCount > 0 && (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-[#A855F7]/20 border border-[#A855F7]/40 text-[#C4B5FD] font-mono font-bold">
+                      {unreadCount} unread
+                    </span>
+                  )}
                 </div>
+
                 <div className="flex items-center gap-2">
-                  {visibleUnreadCount > 0 && (
+                  {unreadCount > 0 && (
                     <button
-                      type="button"
-                      onClick={handleMarkAllAsRead}
-                      className="text-[10px] text-neonPurple hover:text-pinkAccent font-semibold transition-colors cursor-pointer flex items-center gap-1"
+                      onClick={handleMarkAllRead}
+                      className="text-[11px] text-[#A855F7] hover:text-[#EC4899] font-medium flex items-center gap-1 transition-colors cursor-pointer"
+                      title="Mark all notifications as read"
                     >
-                      <Check size={11} />
-                      Mark all as read
+                      <CheckCheck size={14} />
+                      <span className="hidden sm:inline">Mark all read</span>
                     </button>
                   )}
-                  <span className="text-[10px] text-textSecondary font-mono px-2 py-0.5 rounded-full bg-[#090014] border border-[#2A1240]">
-                    {formatCount(visibleUnreadCount)} unread
-                  </span>
+                  <button
+                    onClick={() => setIsNotificationOpen(false)}
+                    className="text-zinc-500 hover:text-white transition-colors cursor-pointer"
+                    aria-label="Close notifications"
+                  >
+                    <X size={15} />
+                  </button>
                 </div>
               </div>
 
-              {/* Notification List */}
-              <div className="max-h-80 overflow-y-auto divide-y divide-[#2A1240]/60 my-1 -mx-2 px-2 scrollbar-thin">
-                {visibleNotifications.length === 0 ? (
-                  <div className="py-8 flex flex-col items-center justify-center text-center space-y-2.5">
-                    <div className="w-10 h-10 rounded-full bg-neonPurple/10 border border-neonPurple/20 flex items-center justify-center text-neonPurple">
-                      <CheckCircle2 size={18} />
+              {/* Body: List or Empty State */}
+              <div className="max-h-80 overflow-y-auto divide-y divide-[#2A1240]/40">
+                {isLoadingNotifications && notifications.length === 0 ? (
+                  <div className="p-8 text-center text-xs text-zinc-400 flex flex-col items-center justify-center gap-2">
+                    <Loader2 className="w-5 h-5 animate-spin text-[#A855F7]" />
+                    <span>Loading security alerts...</span>
+                  </div>
+                ) : notifications.length === 0 ? (
+                  <div className="p-8 text-center text-xs text-zinc-400 flex flex-col items-center justify-center">
+                    <div className="p-3 rounded-full bg-[#12051F] border border-[#2A1240] mb-2.5 text-zinc-500">
+                      <Bell size={22} />
                     </div>
-                    <div className="space-y-0.5">
-                      <p className="text-xs font-bold text-white">No new notifications</p>
-                      <p className="text-[11px] text-textSecondary max-w-[220px] leading-relaxed">
-                        You&apos;re all caught up. Security alerts and scan events will appear here.
-                      </p>
-                    </div>
+                    <p className="font-bold text-white text-xs">No Notifications</p>
+                    <p className="text-[11px] text-zinc-500 mt-1">
+                      You're all caught up with workspace security events.
+                    </p>
                   </div>
                 ) : (
-                  visibleNotifications.map((n) => {
-                    const iconConfig = getNotificationIcon(n.notification_type, n.severity);
-                    const IconComponent = iconConfig.icon;
-
-                    return (
-                      <div
-                        key={n.id}
-                        onClick={() => handleNotificationClick(n)}
-                        className={`py-3 px-2 rounded-xl transition-all cursor-pointer flex items-start gap-3 hover:bg-[#1C0B2E]/60 ${
-                          !n.is_read ? 'bg-[#180826]/40 border-l-2 border-l-neonPurple' : 'opacity-85'
-                        }`}
-                      >
-                        <div
-                          className={`w-7 h-7 shrink-0 rounded-lg flex items-center justify-center border ${iconConfig.colorClass}`}
-                        >
-                          <IconComponent size={14} />
-                        </div>
-
-                        <div className="flex-1 min-w-0 space-y-0.5">
-                          <div className="flex items-center justify-between gap-1">
-                            <p className="text-xs font-semibold text-white truncate">
-                              {n.title}
-                            </p>
-                            <span className="text-[9px] text-textSecondary font-mono shrink-0">
-                              {formatRelativeTime(n.created_at)}
-                            </span>
-                          </div>
-
-                          <p className="text-[11px] text-textSecondary line-clamp-2 leading-tight">
-                            {n.message}
-                          </p>
-                        </div>
-
-                        {!n.is_read && (
-                          <div className="w-1.5 h-1.5 rounded-full bg-pinkAccent shrink-0 mt-1.5 shadow-[0_0_6px_rgba(244,63,94,0.8)]" />
-                        )}
+                  notifications.map((n) => (
+                    <div
+                      key={n.id}
+                      onClick={(e) => !n.is_read && handleMarkRead(n.id, e)}
+                      className={`p-3.5 transition-colors flex items-start gap-3 cursor-pointer ${
+                        n.is_read
+                          ? 'bg-transparent hover:bg-[#12051F]/40 opacity-70'
+                          : 'bg-[#12051F]/70 hover:bg-[#1A072E] border-l-2 border-l-[#A855F7]'
+                      }`}
+                    >
+                      <div className="p-2 rounded-xl bg-[#06000E] border border-[#2A1240] shrink-0 mt-0.5">
+                        {getSeverityIcon(n.severity)}
                       </div>
-                    );
-                  })
+
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-2">
+                          <h5 className={`text-xs font-bold truncate ${n.is_read ? 'text-zinc-300' : 'text-white'}`}>
+                            {n.title}
+                          </h5>
+                          {!n.is_read && (
+                            <span className="w-2 h-2 rounded-full bg-[#00f2fe] shrink-0 shadow-[0_0_6px_#00f2fe]" title="Unread" />
+                          )}
+                        </div>
+                        <p className="text-[11px] text-zinc-400 mt-0.5 leading-snug line-clamp-2">
+                          {n.message}
+                        </p>
+                        <div className="flex items-center justify-between mt-1.5 text-[10px] text-zinc-500">
+                          <span className="uppercase font-mono tracking-wider text-[9px] text-zinc-400">
+                            {n.severity}
+                          </span>
+                          {n.created_at && (
+                            <span>{new Date(n.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))
                 )}
               </div>
 
-              {/* Popover Footer */}
-              <div className="pt-3 border-t border-[#2A1240] flex items-center justify-between text-[11px]">
+              {/* Footer */}
+              <div className="p-2.5 bg-[#12051F]/80 border-t border-[#2A1240] text-center">
                 <button
-                  type="button"
                   onClick={() => {
-                    setIsNotificationsOpen(false);
-                    navigate('/settings');
-                  }}
-                  className="text-textSecondary hover:text-neonPurple transition-colors cursor-pointer"
-                >
-                  Notification settings
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsNotificationsOpen(false);
+                    setIsNotificationOpen(false);
                     navigate('/findings');
                   }}
-                  className="text-neonPurple hover:text-pinkAccent font-semibold transition-colors cursor-pointer"
+                  className="text-[11px] font-bold text-[#A855F7] hover:text-[#EC4899] transition-colors cursor-pointer"
                 >
-                  View findings &rarr;
+                  View All Findings & Alerts &rarr;
                 </button>
               </div>
+
             </div>
           )}
         </div>
 
-        {/* Quick Connect GitHub action if email logged in but GitHub not linked */}
-        {!isGithubConnected && currentUser && (
-          <Button
-            onClick={() => window.location.href = `${API_BASE_URL}/auth/github`}
-            variant="outline"
-            size="sm"
-            className="hidden md:flex items-center gap-1.5 h-8 text-xs border-[#2A1240] hover:border-[#A855F7]/60 text-[#C4B5FD] hover:text-white bg-[#12051F]/80 rounded-xl cursor-pointer"
-          >
-            <Github size={13} className="text-[#A855F7]" />
-            <span>Connect GitHub</span>
-          </Button>
-        )}
-
-        <div className="flex items-center gap-2.5 pl-3 border-l border-border/50">
+        {/* User Profile Pill */}
+        <div
+          onClick={() => navigate('/settings')}
+          className="flex items-center gap-2.5 pl-3 border-l border-border/50 cursor-pointer group"
+          title="User Profile & Settings"
+        >
           <div className="text-right hidden lg:block">
-            <p className="text-xs font-bold text-foreground font-mono truncate max-w-[150px]">
-              {gitHubUser?.name ||
-                currentUser?.name ||
-                currentUser?.display_name ||
-                currentUser?.login ||
-                (currentUser?.email
-                  ? currentUser.email.split('@')[0].replace(/[._\-+]+/g, ' ').split(' ').map(w => w ? w.charAt(0).toUpperCase() + w.slice(1) : '').filter(Boolean).join(' ')
-                  : 'User')}
+            <p className="text-xs font-bold text-foreground font-mono group-hover:text-[#A855F7] transition-colors">
+              {currentUser?.name || currentUser?.login || 'DevSecOps User'}
             </p>
-            <p className="text-[10px] text-textSecondary font-mono">
-              {isGithubConnected ? `@${gitHubUser?.login || currentUser?.github_login || 'connected'}` : 'Email Verified'}
+            <p className="text-[10px] text-textSecondary">
+              {currentUser?.email || (currentUser ? 'Authenticated' : 'Rakshak Security')}
             </p>
           </div>
 
-          {(gitHubUser?.avatar_url || currentUser?.avatar_url) ? (
+          {currentUser?.avatar_url ? (
             <img
-              src={gitHubUser?.avatar_url || currentUser?.avatar_url || ''}
-              alt={gitHubUser?.login || currentUser?.login || 'User avatar'}
-              className="w-8 h-8 rounded-full border border-neonPurple shadow-sm"
+              src={currentUser.avatar_url}
+              alt={currentUser.name || currentUser.login || 'User avatar'}
+              className="w-8 h-8 rounded-full border border-neonPurple shadow-sm group-hover:scale-105 transition-transform"
             />
           ) : (
-            <div className="w-8 h-8 rounded-full bg-rakshak-gradient p-[1.5px] shrink-0">
+            <div className="w-8 h-8 rounded-full bg-rakshak-gradient p-[1.5px] shrink-0 group-hover:scale-105 transition-transform">
               <div className="w-full h-full bg-card rounded-full flex items-center justify-center">
                 <User size={15} className="text-neonPurple" />
               </div>

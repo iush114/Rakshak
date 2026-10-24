@@ -1,4 +1,3 @@
-import { formatNumber } from '@/utils/formatters';
 import { useState } from 'react';
 import { 
   ShieldCheck, 
@@ -168,7 +167,7 @@ export default function Policies() {
                     <Sliders size={14} className="text-neonPurple" />
                     CVSS Failure Threshold:
                   </span>
-                  <span className="font-extrabold text-danger font-mono">{formatNumber(pol.cvssThreshold, 2)} / 10</span>
+                  <span className="font-extrabold text-danger font-mono">{pol.cvssThreshold.toFixed(1)} / 10</span>
                 </div>
                 <input 
                   type="range" 

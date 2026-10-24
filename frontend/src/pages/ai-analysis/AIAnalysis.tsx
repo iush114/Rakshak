@@ -1,4 +1,3 @@
-import { formatScore } from '@/utils/formatters';
 import { useState, useEffect } from 'react';
 import {
   Brain,
@@ -54,7 +53,7 @@ export default function AIAnalysis() {
     } else {
       setAiDetails({
         explanation: selectedFinding.description || 'Vulnerability detected by DevSecOps pipeline scanner.',
-        danger: `Exploit risk assessed with CVSS score of ${formatScore(selectedFinding.riskScore)}/100.`,
+        danger: `Exploit risk assessed with CVSS score of ${selectedFinding.riskScore}/100.`,
         impact: `Potential impact across ${selectedFinding.package}.`,
         remediation: [selectedFinding.fixedVersion !== 'No fix available' ? `Upgrade ${selectedFinding.package} to ${selectedFinding.fixedVersion}` : 'Apply security hardening configuration.'],
         riskSummary: `${selectedFinding.priority} priority threat vector.`
@@ -85,7 +84,7 @@ export default function AIAnalysis() {
     if (!selectedFinding.vulnerabilityId) return;
     setIsGenerating(true);
     try {
-      const res = await analyzeFindingWithAI(selectedFinding.vulnerabilityId);
+      const res = await analyzeFindingWithAI(selectedFinding.vulnerabilityId, selectedFinding.backendId);
       setAiDetails({
         explanation: res.explanation,
         danger: res.potentialImpact,
@@ -227,7 +226,7 @@ export default function AIAnalysis() {
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="flex items-end justify-between">
-                  <span className="text-4xl font-black font-mono text-warning">{formatScore(selectedFinding.riskScore)}</span>
+                  <span className="text-4xl font-black font-mono text-warning">{selectedFinding.riskScore}</span>
                   <span className="text-xs font-mono text-textSecondary">CVSS Normalized Score</span>
                 </div>
                 <div className="w-full bg-border/50 h-2 rounded-full overflow-hidden">

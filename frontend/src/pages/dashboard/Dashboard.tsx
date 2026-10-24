@@ -1,37 +1,37 @@
-import { formatScore, formatCount } from '@/utils/formatters';
+import { CLEAN_BASE } from '@/services/api';
 import { useState } from 'react';
 import { motion } from 'framer-motion';
-import {
-  ShieldAlert,
-  Flame,
-  KeyRound,
-  TrendingUp,
-  ArrowUpRight,
+import { 
+  ShieldAlert, 
+  Flame, 
+  KeyRound, 
+  TrendingUp, 
+  ArrowUpRight, 
   Sparkles,
   Zap,
   CheckCircle2,
   FileText,
   ShieldCheck,
   AlertTriangle,
-  Info,
   GitBranch,
   ChevronRight,
   Cpu
 } from 'lucide-react';
 import { GithubIcon } from '@/components/ui/GithubIcon';
+import { SecurityOrbCanvas } from '@/components/3d/SecurityOrbCanvas';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { useNavigate } from 'react-router-dom';
 import { useSecurity } from '@/context/SecurityContext';
-import {
-  Line,
-  XAxis,
-  YAxis,
-  Tooltip as RechartsTooltip,
-  ResponsiveContainer,
-  PieChart,
-  Pie,
+import { 
+  Line, 
+  XAxis, 
+  YAxis, 
+  Tooltip as RechartsTooltip, 
+  ResponsiveContainer, 
+  PieChart, 
+  Pie, 
   Cell,
   AreaChart,
   Area
@@ -39,17 +39,16 @@ import {
 
 export default function Dashboard() {
   const navigate = useNavigate();
-  const {
-    findings,
+  const { 
+    findings, 
     summary,
     isLoading,
     backendOnline,
     backendError,
-    currentUser,
     refreshData,
-    secrets,
-    repositories,
-    selectedRepo,
+    secrets, 
+    repositories, 
+    selectedRepo, 
     selectRepository,
     selectedGitHubRepo,
     isGithubConnected,
@@ -91,8 +90,8 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-8 pb-16 font-sans">
-
-      {/* Backend Offline / Connection Error Notice */}
+      
+      {/* Backend Offline / Error Notice */}
       {!backendOnline && backendError && (
         <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs text-amber-200 animate-in fade-in">
           <div className="flex items-center gap-2">
@@ -112,50 +111,36 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Unauthenticated / Sign-in Required Notice */}
-      {backendOnline && !currentUser && backendError && (
-        <div className="p-4 rounded-2xl bg-purple-500/10 border border-purple-500/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs text-purple-200 animate-in fade-in">
-          <div className="flex items-center gap-2">
-            <Info className="text-neonPurple shrink-0" size={18} />
-            <span>
-              <strong>Authentication Notice:</strong> {backendError}
-            </span>
-          </div>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => navigate('/login')}
-            className="border-purple-500/40 text-purple-300 hover:bg-purple-500/20 text-xs shrink-0"
-          >
-            <span>Sign In</span>
-          </Button>
-        </div>
-      )}
-
       {/* ========================================================= */}
       {/* 1. TOP BANNER / WELCOME & REPO CONTEXT */}
       {/* ========================================================= */}
       <div className="relative p-6 sm:p-8 rounded-3xl bg-gradient-to-br from-[#12051F]/90 via-[#19072c]/90 to-[#270c44]/90 border border-[#A855F7]/30 shadow-[0_0_35px_rgba(168,85,247,0.15)] flex flex-col lg:flex-row lg:items-center justify-between gap-6 overflow-hidden">
-
+        
         <div className="absolute top-0 right-0 w-80 h-80 bg-neonPurple/10 rounded-full blur-3xl pointer-events-none" />
+        
+        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-6 z-10">
+          {/* 3D Holographic Security Orb Telemetry Node */}
+          <div className="relative p-2.5 rounded-2xl bg-[#050e24]/80 border border-cyan-500/40 shadow-[0_0_30px_rgba(0,242,254,0.25)] shrink-0 flex flex-col items-center">
+            <SecurityOrbCanvas 
+              className="w-28 h-28 sm:w-32 sm:h-32" 
+              isHealthy={backendOnline && criticalCount === 0} 
+            />
+            <div className="mt-1 flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-cyan-950/60 border border-cyan-500/30 text-[9px] font-mono font-bold text-cyan-300">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              <span>3D SOC CORE</span>
+            </div>
+          </div>
 
-        <div className="space-y-2 z-10">
+          <div className="space-y-2">
           <div className="flex flex-wrap items-center gap-2.5">
             <h1 className="text-2xl sm:text-3xl font-black tracking-tight text-white flex items-center gap-2">
               <span>Security Command Center</span>
             </h1>
             {backendOnline ? (
-              currentUser ? (
-                <Badge className="bg-emerald-500/15 text-emerald-300 border-emerald-500/30 text-xs px-2.5 py-0.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 mr-1.5 animate-pulse" />
-                  FastAPI Connected (127.0.0.1:8000)
-                </Badge>
-              ) : (
-                <Badge className="bg-purple-500/15 text-purple-300 border-purple-500/30 text-xs px-2.5 py-0.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-purple-400 mr-1.5 animate-pulse" />
-                  FastAPI Online (Auth Required)
-                </Badge>
-              )
+              <Badge className="bg-emerald-500/15 text-emerald-300 border-emerald-500/30 text-xs px-2.5 py-0.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 mr-1.5 animate-pulse" />
+                FastAPI Connected ({CLEAN_BASE.replace(/^https?:\/\//, "")})
+              </Badge>
             ) : (
               <Badge className="bg-amber-500/15 text-amber-300 border-amber-500/30 text-xs px-2.5 py-0.5">
                 <span className="w-1.5 h-1.5 rounded-full bg-amber-400 mr-1.5 animate-pulse" />
@@ -171,7 +156,7 @@ export default function Dashboard() {
               </Badge>
             )}
           </div>
-
+          
           <p className="text-xs sm:text-sm text-[#C4B5FD]/80 max-w-2xl leading-relaxed">
             Real-time DevSecOps posture, autonomous threat prioritization, and AI remediation intelligence for your software supply chain.
           </p>
@@ -219,9 +204,11 @@ export default function Dashboard() {
             )}
           </div>
         </div>
+        </div>
+
         {/* Header Action Buttons */}
         <div className="flex flex-wrap items-center gap-3 z-10">
-          <Button
+          <Button 
             onClick={() => navigate('/repositories')}
             className="bg-rakshak-gradient text-white text-xs font-bold px-4 py-2.5 rounded-xl shadow-[0_0_20px_rgba(236,72,153,0.35)] hover:scale-105 transition-all flex items-center gap-2 cursor-pointer"
           >
@@ -229,7 +216,7 @@ export default function Dashboard() {
             <span>Launch Repo Scan</span>
           </Button>
 
-          <Button
+          <Button 
             variant="outline"
             onClick={() => navigate('/reports')}
             className="bg-[#090014]/80 border-[#2A1240] hover:border-[#A855F7]/60 text-[#C4B5FD] hover:text-white text-xs font-semibold px-4 py-2.5 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer"
@@ -248,7 +235,7 @@ export default function Dashboard() {
         {[
           {
             title: 'Security Health Score',
-            value: `${formatScore(healthScore)}/100`,
+            value: `${healthScore}/100`,
             subtitle: healthScore >= 80 ? 'GRADE A (EXCELLENT)' : healthScore >= 60 ? 'GRADE B (STABLE)' : 'GRADE C (ATTENTION NEEDED)',
             change: '+6% this week',
             isUp: true,
@@ -260,7 +247,7 @@ export default function Dashboard() {
           },
           {
             title: 'Total Findings',
-            value: formatCount(totalFindingsCount),
+            value: totalFindingsCount.toString(),
             subtitle: `${prioritizedCount} Prioritized`,
             change: `${totalFindingsCount} Detected`,
             isUp: totalFindingsCount === 0,
@@ -272,7 +259,7 @@ export default function Dashboard() {
           },
           {
             title: 'Critical CVEs',
-            value: formatCount(criticalCount),
+            value: criticalCount.toString(),
             subtitle: 'Immediate Action Required',
             change: criticalCount > 0 ? 'Urgent Patch' : 'Clear',
             isUp: criticalCount === 0,
@@ -284,7 +271,7 @@ export default function Dashboard() {
           },
           {
             title: 'Exposed Secrets',
-            value: formatCount(secretFindingsCount),
+            value: secretFindingsCount.toString(),
             subtitle: 'Gitleaks AST Flagged',
             change: secretFindingsCount > 0 ? 'Active Alerts' : 'Clean',
             isUp: secretFindingsCount === 0,
@@ -333,9 +320,9 @@ export default function Dashboard() {
                 </div>
 
                 <div className="w-full bg-[#090014] h-1.5 rounded-full mt-3 overflow-hidden border border-[#2A1240]/50">
-                  <div
-                    className={`h-full ${kpi.barColor} rounded-full transition-all duration-500`}
-                    style={{ width: `${kpi.barPercent}%` }}
+                  <div 
+                    className={`h-full ${kpi.barColor} rounded-full transition-all duration-500`} 
+                    style={{ width: `${kpi.barPercent}%` }} 
                   />
                 </div>
               </CardContent>
@@ -348,7 +335,7 @@ export default function Dashboard() {
       {/* 3. INTERACTIVE CHARTS SECTION */}
       {/* ========================================================= */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-
+        
         {/* 1. Vulnerability Trend & Ingestion Velocity */}
         <Card className="lg:col-span-8 bg-[#12051F]/80 border-[#2A1240] shadow-xl">
           <CardHeader className="flex flex-row items-center justify-between pb-2 border-b border-[#2A1240]/50">
@@ -395,9 +382,8 @@ export default function Dashboard() {
                   </defs>
                   <XAxis dataKey="name" stroke="#C4B5FD" opacity={0.4} fontSize={11} tickLine={false} />
                   <YAxis stroke="#C4B5FD" opacity={0.4} fontSize={11} tickLine={false} />
-                  <RechartsTooltip
+                  <RechartsTooltip 
                     contentStyle={{ backgroundColor: '#12051F', borderColor: '#2A1240', borderRadius: '12px', color: '#FFF', fontSize: '12px' }}
-                    formatter={(value: any, name: any) => [formatCount(value), name]}
                   />
                   <Area type="monotone" dataKey="findings" stroke="#A855F7" strokeWidth={2.5} fillOpacity={1} fill="url(#findingsGrad)" name="Active Findings" />
                   <Area type="monotone" dataKey="resolved" stroke="#10B981" strokeWidth={2} fillOpacity={1} fill="url(#resolvedGrad)" name="Resolved" />
@@ -446,14 +432,13 @@ export default function Dashboard() {
                       <Cell key={`cell-${index}`} fill={entry.color} />
                     ))}
                   </Pie>
-                  <RechartsTooltip
+                  <RechartsTooltip 
                     contentStyle={{ backgroundColor: '#12051F', borderColor: '#2A1240', borderRadius: '12px', color: '#FFF', fontSize: '12px' }}
-                    formatter={(value: any, name: any) => [formatCount(value), name]}
                   />
                 </PieChart>
               </ResponsiveContainer>
               <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-                <span className="text-3xl font-black text-white">{formatCount(totalFindingsCount)}</span>
+                <span className="text-3xl font-black text-white">{totalFindingsCount}</span>
                 <span className="text-[10px] text-[#C4B5FD]/70 uppercase font-bold tracking-widest">Total Threats</span>
               </div>
             </div>
@@ -466,7 +451,7 @@ export default function Dashboard() {
                     <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: item.color }} />
                     <span className="text-zinc-300 font-medium">{item.name}</span>
                   </div>
-                  <span className="font-mono font-bold text-white">{formatCount(item.value)}</span>
+                  <span className="font-mono font-bold text-white">{item.value}</span>
                 </div>
               ))}
             </div>
@@ -492,9 +477,9 @@ export default function Dashboard() {
                 Top threats requiring immediate patching or configuration override
               </CardDescription>
             </div>
-
-            <Button
-              variant="ghost"
+            
+            <Button 
+              variant="ghost" 
               size="sm"
               onClick={() => navigate('/findings')}
               className="text-xs text-[#A855F7] hover:text-[#EC4899] flex items-center gap-1 cursor-pointer"
@@ -525,7 +510,7 @@ export default function Dashboard() {
                     </tr>
                   ) : (
                     findings.slice(0, 5).map((finding, idx) => (
-                      <tr
+                      <tr 
                         key={finding.id || idx}
                         onClick={() => navigate('/findings')}
                         className="hover:bg-white/5 transition-colors cursor-pointer group"
@@ -542,7 +527,7 @@ export default function Dashboard() {
                           {finding.package}
                         </td>
                         <td className="px-4 py-3.5">
-                          <span className="font-extrabold text-white">{formatScore(finding.riskScore)}/100</span>
+                          <span className="font-extrabold text-white">{finding.riskScore}/100</span>
                         </td>
                         <td className="px-4 py-3.5 text-right">
                           <Button
@@ -585,11 +570,11 @@ export default function Dashboard() {
             <div className="p-4 rounded-2xl bg-[#090014]/80 border border-[#2A1240] text-xs leading-relaxed text-zinc-300 space-y-2.5">
               <div className="flex items-center gap-2 text-amber-300 font-bold">
                 <Zap size={15} />
-                <span>{formatCount(criticalCount)} Critical & {formatCount(highCount)} High Threats Identified</span>
+                <span>{criticalCount} Critical & {highCount} High Threats Identified</span>
               </div>
               <p className="text-zinc-400">
                 {findings.length > 0
-                  ? `Automated DevSecOps scan identified ${formatCount(totalFindingsCount)} security findings across code, dependencies, and secrets with autonomous risk scoring.`
+                  ? `Automated DevSecOps scan identified ${totalFindingsCount} security findings across code, dependencies, and secrets with autonomous risk scoring.`
                   : 'No active vulnerabilities detected in the monitored repository branches.'}
               </p>
               <div className="pt-2 border-t border-[#2A1240] flex items-center justify-between text-[11px] text-emerald-400">
@@ -601,7 +586,7 @@ export default function Dashboard() {
             </div>
 
             <div className="space-y-2 pt-2">
-              <Button
+              <Button 
                 onClick={() => navigate('/ai-analysis-history')}
                 className="w-full text-xs font-bold h-10 bg-rakshak-gradient text-white rounded-xl shadow-[0_0_20px_rgba(168,85,247,0.3)] hover:scale-[1.02] transition-all flex items-center justify-center gap-2 cursor-pointer"
               >
@@ -610,7 +595,7 @@ export default function Dashboard() {
                 <ChevronRight size={14} />
               </Button>
 
-              <Button
+              <Button 
                 variant="outline"
                 onClick={() => navigate('/findings')}
                 className="w-full text-xs font-semibold h-9 bg-[#090014] border-[#2A1240] hover:border-[#A855F7] text-[#C4B5FD] hover:text-white rounded-xl transition-all cursor-pointer"
@@ -651,7 +636,7 @@ export default function Dashboard() {
           {repositories.length > 0 ? (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               {repositories.map((repo) => (
-                <div
+                <div 
                   key={repo.id}
                   onClick={() => { selectRepository(repo.id); navigate('/repositories'); }}
                   className="p-4 rounded-2xl bg-[#090014]/80 border border-[#2A1240] hover:border-[#A855F7]/60 hover:shadow-[0_0_20px_rgba(168,85,247,0.2)] transition-all cursor-pointer flex flex-col justify-between space-y-3 group"
@@ -673,8 +658,8 @@ export default function Dashboard() {
                   </div>
 
                   <div className="flex items-center justify-between text-xs pt-2 border-t border-[#2A1240] text-[#C4B5FD]/70">
-                    <span>{repo.language} ({formatCount(repo.filesCount)} files)</span>
-                    <span className="font-mono text-emerald-400 font-bold">{formatCount(repo.dependenciesCount)} deps</span>
+                    <span>{repo.language}</span>
+                    <span className="font-mono text-purple-400 font-bold">{repo.visibility}</span>
                   </div>
                 </div>
               ))}

@@ -1,10 +1,50 @@
+import { auth } from '@/firebase';
 import { type Finding } from '@/data/findings';
 
 // Normalize FastAPI Backend URL configuration
-export const RAW_URL = import.meta.env.VITE_API_BASE_URL || (typeof window !== 'undefined' && window.location.hostname === 'localhost' ? 'http://localhost:8000' : 'http://127.0.0.1:8000');
+const envRawUrl = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000';
+export const RAW_URL = (envRawUrl.startsWith('http://') || envRawUrl.startsWith('https://'))
+  ? envRawUrl
+  : `https://${envRawUrl}`;
 export const CLEAN_BASE = RAW_URL.replace(/\/api\/?$/, '').replace(/\/+$/, '');
 export const API_BASE_URL = `${CLEAN_BASE}/api`;
 export const HEALTH_URL = `${CLEAN_BASE}/health`;
+
+/**
+ * Retrieve current Firebase ID token and return Authorization Bearer header.
+ */
+export async function getAuthHeader(): Promise<Record<string, string>> {
+  try {
+    const currentUser = auth.currentUser;
+    if (currentUser) {
+      const token = await currentUser.getIdToken();
+      if (token) {
+        return { 'Authorization': `Bearer ${token}` };
+      }
+    }
+  } catch (err) {
+    console.warn('[Rakshak API] Unable to get Firebase ID token:', err);
+  }
+  return {};
+}
+
+/**
+ * Fetch wrapper that attaches Firebase ID token as Bearer token and credentials: include.
+ */
+export async function fetchWithAuth(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const authHeader = await getAuthHeader();
+  const headers = new Headers(init?.headers || {});
+  for (const [key, val] of Object.entries(authHeader)) {
+    if (!headers.has(key)) {
+      headers.set(key, val);
+    }
+  }
+  return fetch(input, {
+    ...init,
+    headers,
+    credentials: init?.credentials ?? 'include',
+  });
+}
 
 export interface ApiSummaryResponse {
   total_findings: number;
@@ -26,6 +66,7 @@ export interface ApiSummaryResponse {
 
 export interface BackendFinding {
   id?: number;
+  finding_id?: number;
   scan_id?: string;
   vulnerability_id?: string;
   title: string;
@@ -61,6 +102,7 @@ export interface ApiFindingsResponse {
 }
 
 export interface ApiScanRequest {
+  /** Required by the backend; defaults to "." (the configured scan root). */
   target_path?: string;
   code_scanning: boolean;
   dependency_scanning: boolean;
@@ -71,6 +113,7 @@ export interface ApiScanRequest {
 export interface ApiScanResponse {
   scan_id: string;
   target_path?: string;
+  repository?: string | null;
   selected_scans?: {
     code_scanning: boolean;
     dependency_scanning: boolean;
@@ -108,19 +151,6 @@ export function createApiError(message: string, status?: number): Error & { stat
 }
 
 // GitHub OAuth & Repository Interfaces
-export interface AuthUser {
-  id: number;
-  login?: string | null;
-  name?: string | null;
-  display_name?: string | null;
-  avatar_url?: string | null;
-  html_url?: string | null;
-  email?: string | null;
-  github_user_id?: number | null;
-  github_login?: string | null;
-  is_verified?: boolean;
-}
-
 export interface GitHubUser {
   id: number;
   login: string;
@@ -247,7 +277,10 @@ export function mapBackendFindingToFrontend(bf: BackendFinding, index: number = 
   const hasFix = Boolean(bf.fix_available || (bf.fixed_version && bf.fixed_version.trim() !== '' && bf.fixed_version.toLowerCase() !== 'no fix available'));
 
   return {
-    id: vulnerabilityId ? `f-${vulnerabilityId}-${index}` : `f-${index}-${Date.now()}`,
+    id: bf.id !== undefined ? `f-${bf.id}` : (vulnerabilityId ? `f-${vulnerabilityId}-${index}` : `f-${index}-${Date.now()}`),
+    backendId: bf.id,
+    scanId: bf.scan_id,
+    target: bf.target,
     vulnerabilityId,
     cve: vulnerabilityId || 'Unavailable',
     title: bf.title || 'Security Vulnerability Finding',
@@ -257,6 +290,7 @@ export function mapBackendFindingToFrontend(bf: BackendFinding, index: number = 
     riskScore: typeof bf.risk_score === 'number' ? bf.risk_score : 0,
     exploitability: bf.exploitability !== undefined ? String(bf.exploitability) : '0.50',
     tool: normalizeToolName(bf.tool),
+    scannerType: bf.scanner_type,
     package: packageNames,
     fixedVersion: bf.fixed_version && bf.fixed_version.trim() !== '' ? bf.fixed_version : (hasFix ? 'Fix Available' : 'No fix available'),
     productionStatus: bf.production !== false ? 'Yes' : 'No',
@@ -279,20 +313,13 @@ export function mapBackendFindingToFrontend(bf: BackendFinding, index: number = 
 /**
  * Fetch current authenticated user info from GET /api/auth/me
  */
-export interface AuthMeResponse {
-  authenticated: boolean;
-  user: AuthUser | null;
-  github_connected: boolean;
-  github_user: GitHubUser | null;
-}
-
-export async function getAuthMe(): Promise<AuthMeResponse> {
-  const res = await fetch(`${API_BASE_URL}/auth/me`, {
+export async function getAuthMe(): Promise<{ authenticated: boolean; user: GitHubUser | null }> {
+  const res = await fetchWithAuth(`${API_BASE_URL}/auth/me`, {
     headers: { 'Accept': 'application/json' },
     credentials: 'include',
   });
   if (!res.ok) {
-    throw createApiError(`Failed to check authentication: HTTP ${res.status}`, res.status);
+    throw new Error(`Failed to check authentication: HTTP ${res.status}`);
   }
   return res.json();
 }
@@ -300,24 +327,8 @@ export async function getAuthMe(): Promise<AuthMeResponse> {
 /**
  * Log out GitHub session via POST /api/auth/logout
  */
-
-/**
- * Disconnect GitHub account via POST /api/auth/github/disconnect
- */
-export async function disconnectGitHub(): Promise<{ success: boolean; message: string }> {
-  const res = await fetch(`${API_BASE_URL}/auth/github/disconnect`, {
-    method: 'POST',
-    headers: { 'Accept': 'application/json' },
-    credentials: 'include',
-  });
-  if (!res.ok) {
-    throw createApiError(`Failed to disconnect GitHub: HTTP ${res.status}`, res.status);
-  }
-  return res.json();
-}
-
 export async function logoutAuth(): Promise<{ success: boolean; message: string }> {
-  const res = await fetch(`${API_BASE_URL}/auth/logout`, {
+  const res = await fetchWithAuth(`${API_BASE_URL}/auth/logout`, {
     method: 'POST',
     headers: { 'Accept': 'application/json' },
     credentials: 'include',
@@ -332,7 +343,7 @@ export async function logoutAuth(): Promise<{ success: boolean; message: string 
  * Fetch user repositories from GET /api/github/repos
  */
 export async function getGitHubRepos(): Promise<GitHubReposResponse> {
-  const res = await fetch(`${API_BASE_URL}/github/repos`, {
+  const res = await fetchWithAuth(`${API_BASE_URL}/github/repos`, {
     headers: { 'Accept': 'application/json' },
     credentials: 'include',
   });
@@ -349,7 +360,7 @@ export async function getGitHubRepos(): Promise<GitHubReposResponse> {
  * Fetch a single GitHub repository from GET /api/github/repos/{owner}/{repo}
  */
 export async function getGitHubRepoDetail(owner: string, repo: string): Promise<{ repository: GitHubRepo }> {
-  const res = await fetch(`${API_BASE_URL}/github/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`, {
+  const res = await fetchWithAuth(`${API_BASE_URL}/github/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`, {
     headers: { 'Accept': 'application/json' },
     credentials: 'include',
   });
@@ -374,7 +385,7 @@ export async function scanGitHubRepository(req: GitHubScanRequest): Promise<GitH
     container_image: req.container_scanning ? (req.container_image || null) : null,
   };
 
-  const res = await fetch(`${API_BASE_URL}/github/scan`, {
+  const res = await fetchWithAuth(`${API_BASE_URL}/github/scan`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -432,7 +443,7 @@ export async function getScans(filters?: {
 }
 
 export async function getScan(scanId: string): Promise<ScanDetail> {
-  const res = await fetch(`${API_BASE_URL}/scans/${encodeURIComponent(scanId)}`, {
+  const res = await fetchWithAuth(`${API_BASE_URL}/scans/${encodeURIComponent(scanId)}`, {
     headers: { 'Accept': 'application/json' },
     credentials: 'include',
   });
@@ -450,7 +461,7 @@ export async function getSecurityGate(scanId: string): Promise<{
   medium_count: number;
   low_count: number;
 }> {
-  const res = await fetch(`${API_BASE_URL}/scans/${encodeURIComponent(scanId)}/security-gate`, {
+  const res = await fetchWithAuth(`${API_BASE_URL}/scans/${encodeURIComponent(scanId)}/security-gate`, {
     headers: { 'Accept': 'application/json' },
     credentials: 'include',
   });
@@ -462,7 +473,7 @@ export async function getSecurityGate(scanId: string): Promise<{
  * Fetch summary statistics from GET /api/summary
  */
 export async function getSummary(): Promise<ApiSummaryResponse> {
-  const res = await fetch(`${API_BASE_URL}/summary`, {
+  const res = await fetchWithAuth(`${API_BASE_URL}/summary`, {
     headers: { 'Accept': 'application/json' },
     credentials: 'include',
   });
@@ -489,13 +500,29 @@ export async function getSummary(): Promise<ApiSummaryResponse> {
 /**
  * Fetch findings from GET /api/findings with optional filters
  */
+/**
+ * Fetch findings.
+ *
+ * `scope` is explicit: 'latest' (default) returns the current scan's findings,
+ * which is the same scan /api/summary describes, so the dashboard totals and
+ * the Findings list agree. 'all' returns the full workspace history, and
+ * `scan_id` pins the result to one scan.
+ */
 export async function getFindings(filters?: {
   severity?: string;
   priority?: string;
   tool?: string;
   search?: string;
+  scope?: 'latest' | 'all';
+  scanId?: string;
 }): Promise<{ total: number; findings: Finding[] }> {
   const url = new URL(`${API_BASE_URL}/findings`);
+  if (filters?.scope) {
+    url.searchParams.set('scope', filters.scope);
+  }
+  if (filters?.scanId) {
+    url.searchParams.set('scan_id', filters.scanId);
+  }
   if (filters?.severity && filters.severity !== 'all') {
     url.searchParams.set('severity', filters.severity);
   }
@@ -531,7 +558,7 @@ export async function getFindings(filters?: {
  * Fetch a single finding by vulnerability_id from GET /api/findings/{vulnerability_id}
  */
 export async function getFindingDetail(vulnerabilityId: string): Promise<Finding> {
-  const res = await fetch(`${API_BASE_URL}/findings/${encodeURIComponent(vulnerabilityId)}`, {
+  const res = await fetchWithAuth(`${API_BASE_URL}/findings/${encodeURIComponent(vulnerabilityId)}`, {
     headers: { 'Accept': 'application/json' },
     credentials: 'include',
   });
@@ -545,12 +572,22 @@ export async function getFindingDetail(vulnerabilityId: string): Promise<Finding
 /**
  * Trigger AI analysis for a single finding via POST /api/findings/{vulnerability_id}/analyze
  */
-export async function analyzeFindingWithAI(vulnerabilityId: string): Promise<AIAnalysisResult & { fullFinding: Finding }> {
+export async function analyzeFindingWithAI(
+  vulnerabilityId: string,
+  findingId?: number,
+): Promise<AIAnalysisResult & { fullFinding: Finding; findingId?: number }> {
   const normalizedVulnerabilityId = vulnerabilityId.trim();
   if (!normalizedVulnerabilityId || normalizedVulnerabilityId.toUpperCase() === 'UNKNOWN') {
     throw createApiError('Cannot analyze a finding without a valid vulnerability ID.');
   }
-  const res = await fetch(`${API_BASE_URL}/findings/${encodeURIComponent(normalizedVulnerabilityId)}/analyze`, {
+  // finding_id identifies the EXACT finding. Without it the backend falls back
+  // to the newest finding sharing this vulnerability ID, which may be a
+  // different file or package.
+  const url = new URL(`${API_BASE_URL}/findings/${encodeURIComponent(normalizedVulnerabilityId)}/analyze`);
+  if (findingId !== undefined) {
+    url.searchParams.set('finding_id', String(findingId));
+  }
+  const res = await fetch(url.toString(), {
     method: 'POST',
     headers: { 'Accept': 'application/json' },
     credentials: 'include',
@@ -575,6 +612,7 @@ export async function analyzeFindingWithAI(vulnerabilityId: string): Promise<AIA
     recommendedAction,
     riskSummary,
     fullFinding,
+    findingId: data.id,
   };
 }
 
@@ -583,6 +621,8 @@ export async function analyzeFindingWithAI(vulnerabilityId: string): Promise<AIA
  */
 export async function performScan(req: ApiScanRequest): Promise<ApiScanResponse & { mappedFindings: Finding[] }> {
   const payload = {
+    // "." is the configured scan root on the backend host. A hard-coded
+    // 'test-project' default scanned whatever happened to sit at that name.
     target_path: req.target_path || '.',
     code_scanning: Boolean(req.code_scanning),
     dependency_scanning: Boolean(req.dependency_scanning),
@@ -590,7 +630,7 @@ export async function performScan(req: ApiScanRequest): Promise<ApiScanResponse 
     container_scanning: Boolean(req.container_scanning),
   };
 
-  const res = await fetch(`${API_BASE_URL}/scan`, {
+  const res = await fetchWithAuth(`${API_BASE_URL}/scan`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -630,21 +670,51 @@ export async function checkBackendHealth(): Promise<boolean> {
   }
 }
 
+/**
+ * Verify email address with token
+ */
+export async function verifyEmail(token: string): Promise<{ message: string; user?: any }> {
+  const res = await fetchWithAuth(`${API_BASE_URL}/auth/verify-email?token=${encodeURIComponent(token)}`, {
+    method: 'GET',
+    credentials: 'include',
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw createApiError(data.detail || 'Email verification failed.', res.status);
+  }
+  return res.json();
+}
 
-// ============================================================
-// NOTIFICATIONS API CLIENT METHODS
-// ============================================================
+/**
+ * Resend email verification link
+ */
+export async function resendVerification(email: string): Promise<{ message: string }> {
+  const res = await fetchWithAuth(`${API_BASE_URL}/auth/resend-verification`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email }),
+    credentials: 'include',
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw createApiError(data.detail || 'Failed to resend verification email.', res.status);
+  }
+  return res.json();
+}
+
+
 
 export interface NotificationItem {
   id: number;
+  user_id: number;
   scan_id?: string | null;
-  finding_id?: string | null;
+  finding_id?: number | null;
   notification_type: string;
   title: string;
   message: string;
-  severity?: string | null;
+  severity: 'critical' | 'high' | 'medium' | 'low' | string;
   is_read: boolean;
-  created_at: string;
+  created_at?: string | null;
 }
 
 export interface NotificationsResponse {
@@ -653,15 +723,11 @@ export interface NotificationsResponse {
 }
 
 /**
- * Fetch workspace-scoped notifications
+ * Fetch workspace notifications for current user from GET /api/notifications
  */
-export async function getNotifications(limit: number = 20): Promise<NotificationsResponse> {
-  const url = new URL(`${API_BASE_URL}/notifications`);
-  if (limit) url.searchParams.set('limit', String(limit));
-
-  const res = await fetch(url.toString(), {
+export async function getNotifications(limit: number = 50): Promise<NotificationsResponse> {
+  const res = await fetchWithAuth(`${API_BASE_URL}/notifications?limit=${limit}`, {
     headers: { 'Accept': 'application/json' },
-    credentials: 'include',
   });
   if (!res.ok) {
     throw createApiError(`Failed to fetch notifications: HTTP ${res.status}`, res.status);
@@ -670,13 +736,12 @@ export async function getNotifications(limit: number = 20): Promise<Notification
 }
 
 /**
- * Mark a single notification as read
+ * Mark a single notification as read via POST /api/notifications/{id}/read
  */
-export async function markNotificationRead(notificationId: number): Promise<{ id: number; is_read: boolean; unread_count: number }> {
-  const res = await fetch(`${API_BASE_URL}/notifications/${encodeURIComponent(notificationId)}/read`, {
+export async function markNotificationAsRead(id: number): Promise<{ status: string; notification_id: number; is_read: boolean; unread_count: number }> {
+  const res = await fetchWithAuth(`${API_BASE_URL}/notifications/${id}/read`, {
     method: 'POST',
     headers: { 'Accept': 'application/json' },
-    credentials: 'include',
   });
   if (!res.ok) {
     throw createApiError(`Failed to mark notification as read: HTTP ${res.status}`, res.status);
@@ -685,13 +750,12 @@ export async function markNotificationRead(notificationId: number): Promise<{ id
 }
 
 /**
- * Mark all notifications for the authenticated user as read
+ * Mark all notifications as read via POST /api/notifications/read-all
  */
-export async function markAllNotificationsRead(): Promise<{ message: string; unread_count: number }> {
-  const res = await fetch(`${API_BASE_URL}/notifications/read-all`, {
+export async function markAllNotificationsAsRead(): Promise<{ status: string; message: string; unread_count: number }> {
+  const res = await fetchWithAuth(`${API_BASE_URL}/notifications/read-all`, {
     method: 'POST',
     headers: { 'Accept': 'application/json' },
-    credentials: 'include',
   });
   if (!res.ok) {
     throw createApiError(`Failed to mark all notifications as read: HTTP ${res.status}`, res.status);

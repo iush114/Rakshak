@@ -24,14 +24,39 @@ class User(Base):
         autoincrement=True,
     )
 
-    github_user_id: Mapped[int] = mapped_column(
+    firebase_uid: Mapped[str | None] = mapped_column(
+        String(128),
+        unique=True,
+        index=True,
+        nullable=True,
+    )
+
+    github_user_id: Mapped[int | None] = mapped_column(
         BigInteger,
         unique=True,
         index=True,
-        nullable=False,
+        nullable=True,
     )
 
-    github_login: Mapped[str] = mapped_column(String(100), nullable=False)
+    github_login: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+    email: Mapped[str | None] = mapped_column(
+        String(255),
+        unique=True,
+        index=True,
+        nullable=True,
+    )
+
+    hashed_password: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+
+    is_verified: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+    )
 
     name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     avatar_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
@@ -56,6 +81,12 @@ class User(Base):
 
     notifications = relationship(
         "Notification",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+
+    verification_tokens = relationship(
+        "EmailVerificationToken",
         back_populates="user",
         cascade="all, delete-orphan",
     )
@@ -487,5 +518,62 @@ class Notification(Base):
     )
     finding = relationship(
         "Finding",
+    )
+
+class EmailVerificationToken(Base):
+    __tablename__ = "email_verification_tokens"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True,
+    )
+
+    user_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    token_hash: Mapped[str] = mapped_column(
+        String(128),
+        nullable=False,
+        index=True,
+    )
+
+    token_type: Mapped[str] = mapped_column(
+        String(30),
+        default="email_verification",
+        nullable=False,
+    )
+
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        index=True,
+    )
+
+    used_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        nullable=True,
+    )
+
+    attempts: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+        index=True,
+    )
+
+    user = relationship(
+        "User",
+        back_populates="verification_tokens",
     )
 

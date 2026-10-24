@@ -50,3 +50,4 @@ export const DEFAULT_SCAN_RESULTS = {
   dependenciesChecked: 0,
   secretsChecked: 0
 };
+

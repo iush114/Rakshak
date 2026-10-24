@@ -1,6 +1,9 @@
+from app.firebase_auth import verify_firebase_id_token, enforce_email_verification, upsert_firebase_user
 import json
 import logging
 import os
+import secrets
+import urllib.parse
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -23,8 +26,20 @@ from starlette.responses import JSONResponse, RedirectResponse
 
 from app.database import Base, engine, get_db
 from app.config import is_production, is_within_allowed_root
+from datetime import timedelta
 from app.models import Finding, GitHubWebhookDelivery, Notification, Scan
-from app.models import FindingLifecycle, User, UserInstallation, UserRepository
+from app.models import FindingLifecycle, User, UserInstallation, UserRepository, EmailVerificationToken
+from app.auth_service import (
+    derive_display_name,
+    hash_password,
+    verify_password,
+    validate_password_strength,
+    normalize_email,
+    generate_verification_token,
+    hash_token,
+    mask_email,
+)
+from app.email_service import send_verification_email, is_email_service_configured
 from app.finding_lifecycle import process_completed_scan_lifecycle
 from app.notification_service import create_scan_notifications
 from app.security_gate import persist_security_gate
@@ -69,19 +84,36 @@ _processed_deliveries: set[str] = set()
 
 
 # ============================================================
-# CORS
+# FRONTEND URL & CORS
 # ============================================================
+
+def get_frontend_url() -> str:
+    """Return the configured frontend base URL or default to localhost:5173."""
+    url = os.getenv("FRONTEND_URL", "http://localhost:5173").strip()
+    if url and not url.startswith("http://") and not url.startswith("https://"):
+        url = f"https://{url}"
+    return url.rstrip("/")
+
+
+def get_cors_origins() -> list[str]:
+    """Resolve allowed CORS origins from environment and defaults."""
+    raw = os.getenv("CORS_ALLOWED_ORIGINS")
+    origins = [item.strip() for item in raw.split(",") if item.strip()] if raw else []
+
+    frontend_url = get_frontend_url()
+    if frontend_url and frontend_url not in origins:
+        origins.append(frontend_url)
+
+    for def_orig in ("http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000", "http://127.0.0.1:3000"):
+        if def_orig not in origins:
+            origins.append(def_orig)
+
+    return origins
+
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        item.strip()
-        for item in os.getenv(
-            "CORS_ALLOWED_ORIGINS",
-            "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000",
-        ).split(",")
-        if item.strip()
-    ],
+    allow_origins=get_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -95,12 +127,18 @@ async def security_headers(request: Request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+
+    frontend_url = get_frontend_url()
+    connect_sources = "'self' https: http://localhost:5173 http://127.0.0.1:5173 http://localhost:8000 http://127.0.0.1:8000"
+    if frontend_url and frontend_url not in connect_sources:
+        connect_sources += f" {frontend_url}"
+
     response.headers["Content-Security-Policy"] = (
-        "default-src 'self'; connect-src 'self' http://localhost:5173 http://127.0.0.1:5173 "
-        "http://localhost:8000 http://127.0.0.1:8000; img-src 'self' data: https:; "
-        "style-src 'self' 'unsafe-inline'; script-src 'self'"
+        f"default-src 'self'; connect-src {connect_sources}; img-src 'self' data: https:; "
+        "style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'"
     )
-    if is_production() and request.url.scheme == "https":
+    is_https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
+    if is_production() and is_https:
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     return response
 
@@ -114,11 +152,23 @@ SESSION_SECRET = os.getenv("SESSION_SECRET")
 if not SESSION_SECRET:
     raise RuntimeError("SESSION_SECRET is not set")
 
+session_cookie_secure = os.getenv("SESSION_COOKIE_SECURE")
+is_prod = is_production()
+https_only = session_cookie_secure.lower() == "true" if session_cookie_secure is not None else is_prod
+
+same_site_env = os.getenv("SESSION_COOKIE_SAME_SITE")
+if same_site_env:
+    same_site = same_site_env.lower()
+elif https_only:
+    same_site = "none"
+else:
+    same_site = "lax"
+
 app.add_middleware(
     SessionMiddleware,
     secret_key=SESSION_SECRET,
-    https_only=os.getenv("SESSION_COOKIE_SECURE", str(is_production())).lower() == "true",
-    same_site="lax",
+    https_only=https_only,
+    same_site=same_site,
 )
 
 
@@ -126,12 +176,12 @@ app.add_middleware(
 # IDENTITY & WORKSPACE OWNERSHIP
 # ============================================================
 
-def upsert_github_user(db: Session, github_user: dict) -> User:
-    """Create or update the Rakshak workspace User for a GitHub identity.
+def upsert_github_user(db: Session, github_user: dict, current_user_id: int | None = None) -> User:
+    """Upsert or link a GitHub user into the Rakshak User model.
 
-    Identity key: ``github_user_id`` (GitHub's stable numeric ID, UNIQUE).
-    ``github_login`` is display metadata only and is never an identity key.
-    Repeated OAuth logins never create duplicate users.
+    If current_user_id is provided, link GitHub identity to that specific active User.
+    Otherwise, search by github_user_id, then by email match.
+    Prevents cross-account collisions if a GitHub account is already tied to another user.
     """
     github_user_id = github_user.get("id")
 
@@ -151,29 +201,62 @@ def upsert_github_user(db: Session, github_user: dict) -> User:
 
     github_login = str(github_user.get("login") or f"github-{github_user_id}")
     now = datetime.utcnow()
+    raw_email = github_user.get("email")
+    normalized_email = raw_email.strip().lower() if raw_email and isinstance(raw_email, str) and raw_email.strip() else None
 
-    user = (
+    # Check if this GitHub identity is already owned by any user
+    existing_gh_owner = (
         db.query(User)
         .filter(User.github_user_id == github_user_id)
         .first()
     )
 
+    user = None
+    if current_user_id is not None:
+        user = db.query(User).filter(User.id == current_user_id).first()
+        if user is not None:
+            if existing_gh_owner is not None and existing_gh_owner.id != user.id:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"This GitHub account (@{github_login}) is already linked to another Rakshak account.",
+                )
+
+    if user is None:
+        user = existing_gh_owner
+
+    if user is None and normalized_email:
+        # Check if an existing verified email user matches
+        user = (
+            db.query(User)
+            .filter(User.email == normalized_email, User.github_user_id.is_(None))
+            .first()
+        )
+
     if user is None:
         user = User(
             github_user_id=github_user_id,
             github_login=github_login,
+            email=normalized_email,
             name=github_user.get("name"),
             avatar_url=github_user.get("avatar_url"),
             html_url=github_user.get("html_url"),
+            is_verified=True,
             created_at=now,
             last_seen_at=now,
         )
         db.add(user)
     else:
+        user.github_user_id = github_user_id
         user.github_login = github_login
-        user.name = github_user.get("name")
-        user.avatar_url = github_user.get("avatar_url")
-        user.html_url = github_user.get("html_url")
+        if normalized_email and not user.email:
+            user.email = normalized_email
+        if github_user.get("name") and not user.name:
+            user.name = github_user.get("name")
+        if github_user.get("avatar_url"):
+            user.avatar_url = github_user.get("avatar_url")
+        if github_user.get("html_url"):
+            user.html_url = github_user.get("html_url")
+        user.is_verified = True
         user.last_seen_at = now
 
     db.commit()
@@ -185,11 +268,22 @@ def get_current_user(
     request: Request,
     db: Session = Depends(get_db),
 ) -> User:
-    """Resolve the authenticated Rakshak workspace from the session.
+    """Resolve the authenticated Rakshak workspace from Firebase ID token or session.
 
-    The session stores the internal Rakshak ``User.id`` (never a frontend
-    supplied ID). Returns 401 when there is no valid authenticated workspace.
+    1. Checks Authorization: Bearer <token> for Firebase ID token authentication.
+       - Validates token with Firebase Admin SDK.
+       - Enforces provider-aware email verification.
+       - Maps/upserts User in database.
+    2. Falls back to session user_pk (for GitHub OAuth / session flows).
+    Returns 401 when unauthenticated.
     """
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header.split(" ", 1)[1].strip()
+        decoded = verify_firebase_id_token(token)
+        enforce_email_verification(decoded)
+        return upsert_firebase_user(db, decoded)
+
     user_pk = request.session.get("user_pk")
 
     user = None
@@ -203,7 +297,7 @@ def get_current_user(
         except (TypeError, ValueError):
             user = None
 
-    if user is None:
+    if user is None or not user.is_verified:
         raise HTTPException(
             status_code=401,
             detail="Authentication required",
@@ -424,7 +518,7 @@ def readiness(db: Session = Depends(get_db)):
 # ============================================================
 
 @app.get("/api/auth/github")
-def github_login():
+def github_login(request: Request):
     client_id = os.getenv("GITHUB_CLIENT_ID")
     redirect_uri = os.getenv("GITHUB_REDIRECT_URI")
 
@@ -434,11 +528,18 @@ def github_login():
             detail="GitHub OAuth configuration is missing",
         )
 
+    # Generate high-entropy state token for CSRF defense
+    oauth_state = secrets.token_urlsafe(32)
+    request.session["oauth_state"] = oauth_state
+
+    # Include prompt=select_account so the user can choose which GitHub account to authorize
     params = urllib.parse.urlencode(
         {
             "client_id": client_id,
             "redirect_uri": redirect_uri,
             "scope": "repo read:user user:email",
+            "state": oauth_state,
+            "prompt": "select_account",
         }
     )
 
@@ -454,12 +555,22 @@ def github_login():
 def github_callback(
     request: Request,
     code: str | None = None,
+    state: str | None = None,
     db: Session = Depends(get_db),
 ):
     if not code:
         raise HTTPException(
             status_code=400,
             detail="GitHub authorization code is missing",
+        )
+
+    # CSRF state parameter validation
+    expected_state = request.session.pop("oauth_state", None)
+    frontend_url = get_frontend_url()
+    if not state or not expected_state or state != expected_state:
+        logger.warning("GitHub OAuth callback state mismatch or expired")
+        return RedirectResponse(
+            url=f"{frontend_url}/repositories?error=oauth_state_invalid"
         )
 
     client_id = os.getenv("GITHUB_CLIENT_ID")
@@ -514,9 +625,6 @@ def github_callback(
             detail="GitHub did not return an access token",
         )
 
-    # Current local-development implementation.
-    request.session["github_access_token"] = access_token
-
     # Get GitHub user information.
     user_request = urllib.request.Request(
         "https://api.github.com/user",
@@ -543,6 +651,19 @@ def github_callback(
             detail="Failed to fetch GitHub user",
         )
 
+    current_user_pk = request.session.get("user_pk")
+    try:
+        user = upsert_github_user(db, github_user, current_user_id=int(current_user_pk) if current_user_pk else None)
+    except HTTPException as exc:
+        if exc.status_code == 409:
+            return RedirectResponse(
+                url=f"{frontend_url}/repositories?error=github_already_linked"
+            )
+        raise
+
+    # Store authenticated session and GitHub credentials for this user
+    request.session["user_pk"] = user.id
+    request.session["github_access_token"] = access_token
     request.session["github_user"] = {
         "id": github_user.get("id"),
         "login": github_user.get("login"),
@@ -551,30 +672,424 @@ def github_callback(
         "html_url": github_user.get("html_url"),
     }
 
-    # Upsert the Rakshak workspace User keyed by the stable GitHub user ID,
-    # then store the INTERNAL Rakshak User.id in the session. Frontend-supplied
-    # identities are never trusted; authorization always resolves this way.
-    user = upsert_github_user(db, github_user)
-    request.session["user_pk"] = user.id
-
     return RedirectResponse(
-        url="http://127.0.0.1:5173/dashboard"
+        url=f"{frontend_url}/repositories?connected=true"
     )
 
 
-@app.get("/api/auth/me")
-def auth_me(request: Request):
-    user = request.session.get("github_user")
+@app.post("/api/auth/github/disconnect")
+def disconnect_github(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Disconnect and unlink GitHub account from the current Rakshak user."""
+    current_user.github_user_id = None
+    current_user.github_login = None
+    db.commit()
 
-    if not user:
-        return {
-            "authenticated": False,
-            "user": None,
-        }
+    request.session.pop("github_access_token", None)
+    request.session.pop("github_user", None)
 
     return {
+        "success": True,
+        "message": "GitHub account disconnected successfully.",
+    }
+
+
+# ============================================================
+# AUTHENTICATION (EMAIL & PASSWORD + EMAIL VERIFICATION)
+# ============================================================
+
+class RegisterRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=255)
+    password: str = Field(min_length=8, max_length=128)
+    name: str | None = Field(default=None, max_length=255)
+
+
+class LoginRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=255)
+    password: str = Field(min_length=1, max_length=128)
+
+
+class VerifyEmailRequest(BaseModel):
+    token: str = Field(min_length=1, max_length=256)
+
+
+class ResendVerificationRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=255)
+
+
+@app.post("/api/auth/register", status_code=201)
+def register(
+    req: RegisterRequest,
+    db: Session = Depends(get_db),
+):
+    try:
+        normalized_email = normalize_email(req.email)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    valid_pw, pw_err = validate_password_strength(req.password)
+    if not valid_pw:
+        raise HTTPException(status_code=422, detail=pw_err or "Password does not meet requirements.")
+
+    now = datetime.utcnow()
+
+    existing_user = db.query(User).filter(User.email == normalized_email).first()
+
+    if existing_user and existing_user.is_verified:
+        raise HTTPException(
+            status_code=409,
+            detail="An account with this email address is already registered.",
+        )
+
+    raw_token, token_hash = generate_verification_token()
+    token_expires_at = now + timedelta(minutes=15)
+
+    if existing_user and not existing_user.is_verified:
+        existing_user.hashed_password = hash_password(req.password)
+        if req.name:
+            existing_user.name = req.name.strip()
+        user = existing_user
+        db.query(EmailVerificationToken).filter(
+            EmailVerificationToken.user_id == user.id,
+            EmailVerificationToken.token_type == "email_verification",
+            EmailVerificationToken.used_at.is_(None),
+        ).update({"used_at": now}, synchronize_session=False)
+    else:
+        user = User(
+            email=normalized_email,
+            hashed_password=hash_password(req.password),
+            name=req.name.strip() if req.name else None,
+            is_verified=False,
+            created_at=now,
+            last_seen_at=now,
+        )
+        db.add(user)
+        db.flush()
+
+    verification_token = EmailVerificationToken(
+        user_id=user.id,
+        token_hash=token_hash,
+        token_type="email_verification",
+        expires_at=token_expires_at,
+        created_at=now,
+    )
+    db.add(verification_token)
+
+    email_result = send_verification_email(
+        to_email=normalized_email,
+        raw_token=raw_token,
+        user_name=user.name,
+    )
+
+    if not email_result.get("success"):
+        db.rollback()
+        err_msg = email_result.get("error") or "Failed to deliver verification email."
+        raise HTTPException(
+            status_code=502,
+            detail=f"Registration failed: {err_msg}",
+        )
+
+    db.commit()
+
+    return {
+        "success": True,
+        "message": "Verification email sent. Please check your inbox.",
+        "email": mask_email(normalized_email),
+    }
+
+
+@app.post("/api/auth/login")
+def login(
+    req: LoginRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    try:
+        normalized_email = normalize_email(req.email)
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+
+    user = db.query(User).filter(User.email == normalized_email).first()
+
+    if not user or not user.hashed_password:
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+
+    if not verify_password(req.password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+
+    if not user.is_verified:
+        return JSONResponse(
+            status_code=403,
+            content={
+                "detail": "Email verification required. Please check your inbox.",
+                "error_code": "EMAIL_UNVERIFIED",
+                "email": user.email,
+            },
+        )
+
+    now = datetime.utcnow()
+    user.last_seen_at = now
+    db.commit()
+
+    request.session.clear()
+    request.session["user_pk"] = user.id
+
+    display_name = user.name or derive_display_name(user.email, user.name)
+    return {
         "authenticated": True,
-        "user": user,
+        "user": {
+            "id": user.id,
+            "email": user.email,
+            "name": user.name or display_name,
+            "display_name": display_name,
+            "login": user.github_login,
+            "avatar_url": user.avatar_url,
+            "html_url": user.html_url,
+            "github_user_id": user.github_user_id,
+            "github_login": user.github_login,
+            "is_verified": user.is_verified,
+        },
+        "github_connected": False,
+        "github_user": None,
+    }
+
+
+@app.post("/api/auth/verify-email")
+def verify_email_endpoint(
+    req: VerifyEmailRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    token_str = req.token.strip()
+    if not token_str:
+        raise HTTPException(status_code=400, detail="Verification token is required.")
+
+    computed_hash = hash_token(token_str)
+    now = datetime.utcnow()
+
+    token_record = (
+        db.query(EmailVerificationToken)
+        .filter(
+            EmailVerificationToken.token_hash == computed_hash,
+            EmailVerificationToken.token_type == "email_verification",
+        )
+        .first()
+    )
+
+    if not token_record:
+        raise HTTPException(status_code=400, detail="Invalid or expired verification token.")
+
+    if token_record.used_at is not None:
+        raise HTTPException(status_code=400, detail="Verification link has already been used. Please log in.")
+
+    if token_record.attempts >= 5:
+        raise HTTPException(status_code=400, detail="Verification attempts exceeded limit. Please request a new link.")
+
+    token_record.attempts += 1
+
+    if token_record.expires_at < now:
+        db.commit()
+        raise HTTPException(status_code=400, detail="Verification link has expired. Please request a new verification email.")
+
+    token_record.used_at = now
+
+    user = db.query(User).filter(User.id == token_record.user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Associated user account not found.")
+
+    user.is_verified = True
+    user.last_seen_at = now
+    db.commit()
+
+    request.session.clear()
+    request.session["user_pk"] = user.id
+
+    display_name = user.name or derive_display_name(user.email, user.name)
+    return {
+        "success": True,
+        "message": "Email verified successfully.",
+        "authenticated": True,
+        "user": {
+            "id": user.id,
+            "email": user.email,
+            "name": user.name or display_name,
+            "display_name": display_name,
+            "login": user.github_login,
+            "avatar_url": user.avatar_url,
+            "html_url": user.html_url,
+            "github_user_id": user.github_user_id,
+            "github_login": user.github_login,
+            "is_verified": user.is_verified,
+        },
+        "github_connected": False,
+        "github_user": None,
+    }
+
+
+@app.post("/api/auth/resend-verification")
+def resend_verification(
+    req: ResendVerificationRequest,
+    db: Session = Depends(get_db),
+):
+    try:
+        normalized_email = normalize_email(req.email)
+    except ValueError:
+        return {
+            "success": True,
+            "message": "If an unverified account exists with this email, a verification link has been sent.",
+        }
+
+    now = datetime.utcnow()
+    user = db.query(User).filter(User.email == normalized_email).first()
+
+    if not user or user.is_verified:
+        return {
+            "success": True,
+            "message": "If an unverified account exists with this email, a verification link has been sent.",
+        }
+
+    recent_token = (
+        db.query(EmailVerificationToken)
+        .filter(
+            EmailVerificationToken.user_id == user.id,
+            EmailVerificationToken.token_type == "email_verification",
+            EmailVerificationToken.created_at >= now - timedelta(seconds=60),
+        )
+        .first()
+    )
+
+    if recent_token:
+        raise HTTPException(
+            status_code=429,
+            detail="Please wait at least 60 seconds before requesting another verification email.",
+        )
+
+    db.query(EmailVerificationToken).filter(
+        EmailVerificationToken.user_id == user.id,
+        EmailVerificationToken.token_type == "email_verification",
+        EmailVerificationToken.used_at.is_(None),
+    ).update({"used_at": now}, synchronize_session=False)
+
+    raw_token, token_hash = generate_verification_token()
+    token_expires_at = now + timedelta(minutes=15)
+
+    new_token = EmailVerificationToken(
+        user_id=user.id,
+        token_hash=token_hash,
+        token_type="email_verification",
+        expires_at=token_expires_at,
+        created_at=now,
+    )
+    db.add(new_token)
+
+    email_result = send_verification_email(
+        to_email=normalized_email,
+        raw_token=raw_token,
+        user_name=user.name,
+    )
+
+    if not email_result.get("success"):
+        db.rollback()
+        err_msg = email_result.get("error") or "Failed to deliver verification email."
+        raise HTTPException(status_code=502, detail=f"Failed to resend verification email: {err_msg}")
+
+    db.commit()
+
+    return {
+        "success": True,
+        "message": "A fresh verification link has been sent to your email.",
+        "email": mask_email(normalized_email),
+    }
+
+
+@app.get("/api/auth/me")
+def auth_me(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header.split(" ", 1)[1].strip()
+        try:
+            decoded = verify_firebase_id_token(token)
+            firebase_meta = decoded.get("firebase", {})
+            sign_in_provider = firebase_meta.get("sign_in_provider", "password")
+            is_verified = (
+                True if sign_in_provider in ("google.com", "github.com")
+                else decoded.get("email_verified", False)
+            )
+            user = upsert_firebase_user(db, decoded)
+            display_name = user.name or decoded.get("name") or derive_display_name(user.email, user.name)
+            return {
+                "authenticated": True,
+                "user": {
+                    "id": user.id,
+                    "firebase_uid": user.firebase_uid,
+                    "email": user.email,
+                    "name": user.name or display_name,
+                    "display_name": display_name,
+                    "login": user.github_login or (user.email.split('@')[0] if user.email else 'Rakshak User'),
+                    "avatar_url": user.avatar_url or decoded.get("picture"),
+                    "email_verified": is_verified,
+                    "provider": sign_in_provider,
+                },
+            }
+        except HTTPException:
+            return {"authenticated": False, "user": None}
+
+    user_pk = request.session.get("user_pk")
+
+    if user_pk is not None:
+        try:
+            user = db.query(User).filter(User.id == int(user_pk)).first()
+            if user and user.is_verified:
+                github_access_token = request.session.get("github_access_token")
+                has_github = bool(user.github_user_id and github_access_token)
+
+                github_info = None
+                if has_github:
+                    github_info = {
+                        "id": user.github_user_id,
+                        "login": user.github_login,
+                        "name": user.name,
+                        "avatar_url": user.avatar_url,
+                        "html_url": user.html_url,
+                    }
+
+                if not has_github:
+                    # Clean session of any detached GitHub credentials
+                    request.session.pop("github_access_token", None)
+                    request.session.pop("github_user", None)
+
+                display_name = user.name or derive_display_name(user.email, user.name)
+                return {
+                    "authenticated": True,
+                    "user": {
+                        "id": user.id,
+                        "email": user.email,
+                        "name": user.name or display_name,
+                        "display_name": display_name,
+                        "login": user.github_login if has_github else None,
+                        "avatar_url": user.avatar_url if has_github else None,
+                        "html_url": user.html_url if has_github else None,
+                        "github_user_id": user.github_user_id,
+                        "github_login": user.github_login,
+                        "is_verified": user.is_verified,
+                    },
+                    "github_connected": has_github,
+                    "github_user": github_info,
+                }
+        except (TypeError, ValueError):
+            pass
+
+    return {
+        "authenticated": False,
+        "user": None,
+        "github_connected": False,
+        "github_user": None,
     }
 
 
@@ -593,15 +1108,15 @@ def github_logout(request: Request):
 # ============================================================
 
 @app.get("/api/github/repos")
-def github_repositories(request: Request):
+def github_repositories(request: Request, current_user: User = Depends(get_current_user)):
     access_token = request.session.get(
         "github_access_token"
     )
 
-    if not access_token:
+    if not access_token or not current_user.github_user_id:
         raise HTTPException(
             status_code=401,
-            detail="GitHub authentication required",
+            detail="GitHub account is not connected. Please connect your GitHub account.",
         )
 
     url = (
@@ -1698,6 +2213,22 @@ def list_notifications(
         .all()
     )
 
+    # If new user workspace has zero notifications, seed an initial real telemetry alert
+    if not notifications and db.query(Notification).filter(Notification.user_id == current_user.id).count() == 0:
+        welcome_notif = Notification(
+            user_id=current_user.id,
+            notification_type="security_telemetry",
+            title="DevSecOps Defense Grid Online",
+            message="Rakshak real-time AST parser and automated threat prioritization are active for your workspace.",
+            severity="medium",
+            is_read=False,
+            created_at=datetime.utcnow(),
+        )
+        db.add(welcome_notif)
+        db.commit()
+        db.refresh(welcome_notif)
+        notifications = [welcome_notif]
+
     unread_count = (
         db.query(Notification)
         .filter(
@@ -2135,3 +2666,10 @@ def system_queue_status():
     Never exposes Redis passwords, internal hostnames, or connection strings.
     """
     return get_queue_status()
+
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.getenv("PORT", "8000"))
+    host = os.getenv("HOST", "0.0.0.0")
+    uvicorn.run("app.main:app", host=host, port=port)

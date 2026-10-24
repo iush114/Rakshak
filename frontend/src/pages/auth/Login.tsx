@@ -1,31 +1,26 @@
 import { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Checkbox } from '@/components/ui/checkbox';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Shield, 
-  Lock, 
-  Eye, 
-  EyeOff, 
-  Mail, 
   Info, 
-  CheckCircle2, 
-  User, 
   Code, 
   Box, 
+  Lock, 
   ShieldCheck, 
   Sparkles, 
   Infinity as InfinityIcon, 
   Zap, 
   Loader2, 
   AlertCircle,
-  X
+  X,
+  CheckCircle2
 } from 'lucide-react';
 import { GithubIcon } from '@/components/ui/GithubIcon';
+import { auth, googleProvider, githubProvider } from '@/firebase';
+import { signInWithPopup } from 'firebase/auth';
 import { useSecurity } from '@/context/SecurityContext';
-import { API_BASE_URL } from '@/services/api';
 
 interface AuthPageProps {
   initialTab?: 'login' | 'register';
@@ -33,7 +28,7 @@ interface AuthPageProps {
 
 export default function Login({ initialTab = 'login' }: AuthPageProps) {
   const navigate = useNavigate();
-  const { connectGithub } = useSecurity();
+  const { checkAuthStatus } = useSecurity();
   const [activeTab, setActiveTab] = useState<'login' | 'register'>(initialTab);
 
   // Sync state if prop changes
@@ -41,123 +36,76 @@ export default function Login({ initialTab = 'login' }: AuthPageProps) {
     setActiveTab(initialTab);
   }, [initialTab]);
 
-  // Form Field States
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [fullName, setFullName] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [acceptedTerms, setAcceptedTerms] = useState(false);
-
-  // Visibility Toggles
-  const [showPassword, setShowPassword] = useState(false);
-  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-
   // UX Feedback States
   const [isLoading, setIsLoading] = useState(false);
+  const [loadingProvider, setLoadingProvider] = useState<'google' | 'github' | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<{ title: string; desc: string; type: 'success' | 'info' | 'error' } | null>(null);
 
-  // Password Validation Criteria
-  const hasMinLength = password.length >= 8;
-  const hasUppercase = /[A-Z]/.test(password);
-  const hasNumber = /[0-9]/.test(password);
-  const hasSpecial = /[^A-Za-z0-9]/.test(password);
-
-  // Password Strength Calculator
-  const getPasswordStrength = () => {
-    if (!password) return { label: 'None', score: 0, color: 'bg-zinc-700', text: 'text-zinc-500' };
-    let score = 0;
-    if (hasMinLength) score += 25;
-    if (hasUppercase) score += 25;
-    if (hasNumber) score += 25;
-    if (hasSpecial) score += 25;
-
-    if (score <= 25) return { label: 'Weak', score: 25, color: 'bg-red-500', text: 'text-red-400' };
-    if (score <= 50) return { label: 'Fair', score: 50, color: 'bg-amber-500', text: 'text-amber-400' };
-    if (score <= 75) return { label: 'Good', score: 75, color: 'bg-blue-500', text: 'text-blue-400' };
-    return { label: 'Strong', score: 100, color: 'bg-emerald-500', text: 'text-emerald-400' };
-  };
-
-  const strength = getPasswordStrength();
-
-  // Handle Form Submission
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setErrorMessage(null);
-
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-    if (activeTab === 'login') {
-      if (!email.trim()) {
-        setErrorMessage('Please enter your email address.');
-        return;
-      }
-      if (!emailRegex.test(email.trim())) {
-        setErrorMessage('Please enter a valid email address.');
-        return;
-      }
-      if (!password) {
-        setErrorMessage('Please enter your password.');
-        return;
-      }
-    } else {
-      if (!fullName.trim()) {
-        setErrorMessage('Please enter your full name.');
-        return;
-      }
-      if (!email.trim() || !emailRegex.test(email.trim())) {
-        setErrorMessage('Please enter a valid email address.');
-        return;
-      }
-      if (!hasMinLength || !hasUppercase || !hasNumber || !hasSpecial) {
-        setErrorMessage('Password must meet all security requirements listed below.');
-        return;
-      }
-      if (password !== confirmPassword) {
-        setErrorMessage('Passwords do not match. Please re-enter.');
-        return;
-      }
-      if (!acceptedTerms) {
-        setErrorMessage('You must agree to the Terms & Privacy Policy to continue.');
-        return;
-      }
-    }
-
+  // Google OAuth via Firebase Popup
+  const handleGoogleAuth = async () => {
     setIsLoading(true);
-    setTimeout(() => {
-      setIsLoading(false);
-      connectGithub();
-      navigate('/dashboard');
-    }, 700);
-  };
-
-  // GitHub OAuth Login - Direct backend OAuth flow
-  const handleGithubAuth = () => {
-    setIsLoading(true);
+    setLoadingProvider('google');
     setErrorMessage(null);
-    setToastMessage({
-      title: 'Connecting GitHub Account',
-      desc: 'Redirecting to GitHub OAuth authorization...',
-      type: 'info'
-    });
-    window.location.href = `${API_BASE_URL}/auth/github`;
-  };
-
-  // Forgot Password Simulation
-  const handleForgotPassword = () => {
-    if (!email.trim()) {
+    try {
+      await signInWithPopup(auth, googleProvider);
       setToastMessage({
-        title: 'Enter Email Address',
-        desc: 'Please type your email address above so we can send reset instructions.',
-        type: 'info'
+        title: 'Authentication Successful',
+        desc: 'Establishing secure Rakshak workspace session...',
+        type: 'success',
       });
-      return;
+      await checkAuthStatus();
+      setTimeout(() => {
+        navigate('/dashboard');
+      }, 400);
+    } catch (err: any) {
+      console.error('Google Auth Error:', err);
+      if (err.code === 'auth/popup-closed-by-user') {
+        setErrorMessage('Sign-in cancelled. The Google popup was closed before completion.');
+      } else if (err.code === 'auth/popup-blocked') {
+        setErrorMessage('Popup was blocked by your browser. Please allow popups for this site to sign in.');
+      } else if (err.code === 'auth/cancelled-popup-request') {
+        // Ignored duplicate
+      } else {
+        setErrorMessage(err.message || 'Failed to authenticate with Google. Please try again.');
+      }
+    } finally {
+      setIsLoading(false);
+      setLoadingProvider(null);
     }
-    setToastMessage({
-      title: 'Password Reset Link Sent',
-      desc: `Instructions have been sent to ${email}. Check your inbox!`,
-      type: 'success'
-    });
+  };
+
+  // GitHub OAuth via Firebase Popup
+  const handleGithubAuth = async () => {
+    setIsLoading(true);
+    setLoadingProvider('github');
+    setErrorMessage(null);
+    try {
+      await signInWithPopup(auth, githubProvider);
+      setToastMessage({
+        title: 'Authentication Successful',
+        desc: 'Connecting GitHub identity to Rakshak workspace...',
+        type: 'success',
+      });
+      await checkAuthStatus();
+      setTimeout(() => {
+        navigate('/dashboard');
+      }, 400);
+    } catch (err: any) {
+      console.error('GitHub Auth Error:', err);
+      if (err.code === 'auth/popup-closed-by-user') {
+        setErrorMessage('Sign-in cancelled. The GitHub popup was closed before completion.');
+      } else if (err.code === 'auth/popup-blocked') {
+        setErrorMessage('Popup was blocked by your browser. Please allow popups for this site to sign in.');
+      } else if (err.code === 'auth/account-exists-with-different-credential') {
+        setErrorMessage('An account already exists with the same email using a different provider.');
+      } else {
+        setErrorMessage(err.message || 'GitHub OAuth authorization failed. Ensure GitHub provider is configured in Firebase Console.');
+      }
+    } finally {
+      setIsLoading(false);
+      setLoadingProvider(null);
+    }
   };
 
   return (
@@ -235,7 +183,7 @@ export default function Login({ initialTab = 'login' }: AuthPageProps) {
             onClick={() => navigate('/')}
             className="rounded-full bg-[#12051F]/60 border-[#2A1240] text-[#C4B5FD] hover:text-white hover:border-[#A855F7]/60 hover:bg-[#A855F7]/10 px-4 py-2 text-xs flex items-center gap-1.5 transition-all cursor-pointer shadow-[0_0_15px_rgba(168,85,247,0.15)]"
           >
-            <span>← Home</span>
+            <span>&larr; Home</span>
           </Button>
 
           <Button
@@ -369,16 +317,16 @@ export default function Login({ initialTab = 'login' }: AuthPageProps) {
             </div>
           </motion.div>
 
-          {/* CENTER AUTHENTICATION CARD */}
+          {/* CENTER AUTHENTICATION CARD (GOOGLE & GITHUB ONLY) */}
           <motion.div 
             initial={{ opacity: 0, y: 25 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.6, delay: 0.3 }}
             className="lg:col-span-6 order-1 lg:order-2 w-full max-w-md mx-auto"
           >
-            <div className="bg-[#12051F]/80 backdrop-blur-xl border border-[#2A1240] hover:border-[#A855F7]/40 transition-all rounded-3xl p-6 sm:p-8 shadow-[0_0_50px_rgba(168,85,247,0.25)] relative overflow-hidden">
+            <div className="bg-[#12051F]/85 backdrop-blur-xl border border-[#2A1240] hover:border-[#A855F7]/40 transition-all rounded-3xl p-6 sm:p-8 shadow-[0_0_50px_rgba(168,85,247,0.25)] relative overflow-hidden">
               
-              <div className="absolute top-0 left-0 right-0 h-[2px] bg-rakshak-gradient opacity-80" />
+              <div className="absolute top-0 left-0 right-0 h-[2px] bg-rakshak-gradient opacity-90" />
 
               {/* TABS: Login | Register */}
               <div className="flex justify-center border-b border-[#2A1240] mb-6 relative">
@@ -417,12 +365,12 @@ export default function Login({ initialTab = 'login' }: AuthPageProps) {
               {/* Form Heading & Subtitle */}
               <div className="text-center mb-6">
                 <h3 className="text-2xl font-black text-white">
-                  {activeTab === 'login' ? 'Welcome Back!' : 'Create Your Account'}
+                  {activeTab === 'login' ? 'Welcome Back!' : 'Get Started with Rakshak'}
                 </h3>
-                <p className="text-xs text-[#C4B5FD]/80 mt-1">
+                <p className="text-xs text-[#C4B5FD]/80 mt-1.5 leading-relaxed">
                   {activeTab === 'login' 
-                    ? 'Login to continue to Rakshak Security Platform' 
-                    : 'Start securing your GitHub repositories'}
+                    ? 'Authenticate using your enterprise identity provider to access the command center.' 
+                    : 'Create your Rakshak security account in one click using Google or GitHub.'}
                 </p>
               </div>
 
@@ -431,227 +379,122 @@ export default function Login({ initialTab = 'login' }: AuthPageProps) {
                 <motion.div 
                   initial={{ opacity: 0, y: -5 }}
                   animate={{ opacity: 1, y: 0 }}
-                  className="mb-4 p-3 rounded-xl bg-red-500/10 border border-red-500/30 text-red-300 text-xs flex items-center gap-2.5"
+                  className="mb-5 p-3 rounded-xl bg-red-500/10 border border-red-500/30 text-red-300 text-xs flex items-center gap-2.5"
                 >
                   <AlertCircle size={16} className="text-red-400 shrink-0" />
-                  <span>{errorMessage}</span>
+                  <span className="leading-tight">{errorMessage}</span>
                 </motion.div>
               )}
 
-              {/* GitHub OAuth Button */}
-              <Button
-                type="button"
-                variant="outline"
-                onClick={handleGithubAuth}
-                disabled={isLoading}
-                className="w-full h-11 bg-[#1A0830] hover:bg-[#250B42] text-white border-[#A855F7]/40 hover:border-[#A855F7] rounded-xl text-xs font-bold transition-all shadow-[0_0_20px_rgba(168,85,247,0.2)] flex items-center justify-center gap-2.5 cursor-pointer mb-5"
-              >
-                <GithubIcon size={18} className="text-white shrink-0" />
-                <span>{activeTab === 'login' ? 'Sign in with GitHub' : 'Sign up with GitHub'}</span>
-              </Button>
-
-              {/* Divider */}
-              <div className="flex items-center gap-3 mb-5">
-                <div className="flex-1 h-[1px] bg-[#2A1240]" />
-                <span className="text-[10px] uppercase font-bold tracking-wider text-[#C4B5FD]/50">
-                  Or continue with email
-                </span>
-                <div className="flex-1 h-[1px] bg-[#2A1240]" />
-              </div>
-
-              {/* AUTH FORM */}
-              <form onSubmit={handleSubmit} className="space-y-4">
+              {/* EXACTLY TWO AUTHENTICATION OPTIONS: GOOGLE & GITHUB */}
+              <div className="space-y-3.5 my-2">
                 
-                {/* Registration: Full Name */}
-                {activeTab === 'register' && (
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-semibold text-[#C4B5FD] uppercase tracking-wider">Full Name</label>
-                    <div className="relative">
-                      <User className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[#C4B5FD]/50" size={16} />
-                      <Input 
-                        type="text" 
-                        placeholder="Enter your full name" 
-                        value={fullName}
-                        onChange={(e) => setFullName(e.target.value)}
-                        className="pl-10 bg-[#090014]/80 border-[#2A1240] focus:border-[#A855F7] focus:ring-[#A855F7]/20 text-white placeholder:text-[#C4B5FD]/40 text-xs h-11 rounded-xl transition-all"
-                      />
-                    </div>
-                  </div>
-                )}
-
-                {/* Email Address */}
-                <div className="space-y-1">
-                  <label className="text-[11px] font-semibold text-[#C4B5FD] uppercase tracking-wider">Email Address</label>
-                  <div className="relative">
-                    <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[#C4B5FD]/50" size={16} />
-                    <Input 
-                      type="email" 
-                      placeholder={activeTab === 'login' ? "Email address" : "Enter your email"} 
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      className="pl-10 bg-[#090014]/80 border-[#2A1240] focus:border-[#A855F7] focus:ring-[#A855F7]/20 text-white placeholder:text-[#C4B5FD]/40 text-xs h-11 rounded-xl transition-all"
-                    />
-                  </div>
-                </div>
-
-                {/* Password Field */}
-                <div className="space-y-1">
-                  <label className="text-[11px] font-semibold text-[#C4B5FD] uppercase tracking-wider">Password</label>
-                  <div className="relative">
-                    <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[#C4B5FD]/50" size={16} />
-                    <Input 
-                      type={showPassword ? "text" : "password"} 
-                      placeholder={activeTab === 'login' ? "Password" : "Create a password"} 
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      className="pl-10 pr-10 bg-[#090014]/80 border-[#2A1240] focus:border-[#A855F7] focus:ring-[#A855F7]/20 text-white placeholder:text-[#C4B5FD]/40 text-xs h-11 rounded-xl transition-all"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowPassword(!showPassword)}
-                      className="absolute right-3.5 top-1/2 -translate-y-1/2 text-[#C4B5FD]/50 hover:text-white transition-colors cursor-pointer"
-                    >
-                      {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
-                    </button>
-                  </div>
-                </div>
-
-                {/* Password Strength Checklist (Registration Only) */}
-                {activeTab === 'register' && password && (
-                  <motion.div 
-                    initial={{ opacity: 0, height: 0 }}
-                    animate={{ opacity: 1, height: 'auto' }}
-                    className="p-3 rounded-xl bg-[#090014]/60 border border-[#2A1240] space-y-2 text-xs"
-                  >
-                    <div className="flex justify-between items-center text-[11px]">
-                      <span className="text-[#C4B5FD]/70 font-medium">Password strength:</span>
-                      <span className={`font-bold ${strength.text}`}>{strength.label}</span>
-                    </div>
-                    <div className="h-1.5 w-full bg-[#2A1240] rounded-full overflow-hidden">
-                      <div 
-                        className={`h-full ${strength.color} transition-all duration-300 rounded-full`} 
-                        style={{ width: `${strength.score}%` }} 
-                      />
-                    </div>
-                    <div className="grid grid-cols-2 gap-1.5 pt-1 text-[11px]">
-                      <div className={`flex items-center gap-1.5 ${hasMinLength ? 'text-emerald-400 font-medium' : 'text-[#C4B5FD]/50'}`}>
-                        <div className={`w-1.5 h-1.5 rounded-full ${hasMinLength ? 'bg-emerald-400' : 'bg-zinc-600'}`} />
-                        <span>8+ characters</span>
-                      </div>
-                      <div className={`flex items-center gap-1.5 ${hasUppercase ? 'text-emerald-400 font-medium' : 'text-[#C4B5FD]/50'}`}>
-                        <div className={`w-1.5 h-1.5 rounded-full ${hasUppercase ? 'bg-emerald-400' : 'bg-zinc-600'}`} />
-                        <span>1 uppercase letter</span>
-                      </div>
-                      <div className={`flex items-center gap-1.5 ${hasNumber ? 'text-emerald-400 font-medium' : 'text-[#C4B5FD]/50'}`}>
-                        <div className={`w-1.5 h-1.5 rounded-full ${hasNumber ? 'bg-emerald-400' : 'bg-zinc-600'}`} />
-                        <span>1 number</span>
-                      </div>
-                      <div className={`flex items-center gap-1.5 ${hasSpecial ? 'text-emerald-400 font-medium' : 'text-[#C4B5FD]/50'}`}>
-                        <div className={`w-1.5 h-1.5 rounded-full ${hasSpecial ? 'bg-emerald-400' : 'bg-zinc-600'}`} />
-                        <span>1 special char</span>
-                      </div>
-                    </div>
-                  </motion.div>
-                )}
-
-                {/* Confirm Password (Registration Only) */}
-                {activeTab === 'register' && (
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-semibold text-[#C4B5FD] uppercase tracking-wider">Confirm Password</label>
-                    <div className="relative">
-                      <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[#C4B5FD]/50" size={16} />
-                      <Input 
-                        type={showConfirmPassword ? "text" : "password"} 
-                        placeholder="Confirm your password" 
-                        value={confirmPassword}
-                        onChange={(e) => setConfirmPassword(e.target.value)}
-                        className="pl-10 pr-10 bg-[#090014]/80 border-[#2A1240] focus:border-[#A855F7] focus:ring-[#A855F7]/20 text-white placeholder:text-[#C4B5FD]/40 text-xs h-11 rounded-xl transition-all"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                        className="absolute right-3.5 top-1/2 -translate-y-1/2 text-[#C4B5FD]/50 hover:text-white transition-colors cursor-pointer"
-                      >
-                        {showConfirmPassword ? <EyeOff size={15} /> : <Eye size={15} />}
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {/* Forgot Password Link (Login Only) */}
-                {activeTab === 'login' && (
-                  <div className="flex justify-end pt-0.5">
-                    <button
-                      type="button"
-                      onClick={handleForgotPassword}
-                      className="text-xs text-[#A855F7] hover:text-[#EC4899] font-semibold transition-colors cursor-pointer"
-                    >
-                      Forgot Password?
-                    </button>
-                  </div>
-                )}
-
-                {/* Terms Checkbox (Registration Only) */}
-                {activeTab === 'register' && (
-                  <div className="flex items-center space-x-2.5 pt-1">
-                    <Checkbox 
-                      id="terms" 
-                      checked={acceptedTerms} 
-                      onCheckedChange={(checked) => setAcceptedTerms(checked as boolean)} 
-                      className="border-[#2A1240] data-[state=checked]:bg-[#A855F7] data-[state=checked]:border-[#A855F7]"
-                    />
-                    <label htmlFor="terms" className="text-xs text-[#C4B5FD]/90 cursor-pointer leading-tight">
-                      I agree to the <a href="#" className="text-[#A855F7] hover:text-[#EC4899] font-medium underline">Terms & Privacy Policy</a>
-                    </label>
-                  </div>
-                )}
-
-                {/* SUBMIT BUTTON */}
-                <Button 
-                  type="submit" 
+                {/* 1. CONTINUE WITH GOOGLE */}
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handleGoogleAuth}
                   disabled={isLoading}
-                  className="w-full h-11 text-sm font-bold text-white rounded-xl bg-rakshak-gradient shadow-[0_0_25px_rgba(168,85,247,0.45)] hover:shadow-[0_0_35px_rgba(236,72,153,0.6)] hover:opacity-95 transition-all cursor-pointer flex items-center justify-center gap-2 mt-2"
+                  className="w-full h-12 bg-white text-zinc-900 hover:bg-zinc-100 border-white/80 rounded-2xl text-xs font-bold transition-all shadow-[0_0_20px_rgba(255,255,255,0.15)] hover:shadow-[0_0_25px_rgba(255,255,255,0.3)] flex items-center justify-center gap-3 cursor-pointer group"
                 >
-                  {isLoading ? (
+                  {loadingProvider === 'google' ? (
                     <>
-                      <Loader2 className="w-4 h-4 animate-spin text-white" />
-                      <span>{activeTab === 'login' ? 'Authenticating...' : 'Creating Account...'}</span>
+                      <Loader2 className="w-4 h-4 animate-spin text-zinc-900" />
+                      <span>Authenticating with Google...</span>
                     </>
                   ) : (
-                    <span>{activeTab === 'login' ? 'Login' : 'Create Account'}</span>
+                    <>
+                      {/* Official Google G Logo */}
+                      <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24">
+                        <path
+                          fill="#4285F4"
+                          d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+                        />
+                        <path
+                          fill="#34A853"
+                          d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+                        />
+                        <path
+                          fill="#FBBC05"
+                          d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
+                        />
+                        <path
+                          fill="#EA4335"
+                          d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
+                        />
+                      </svg>
+                      <span className="font-semibold text-zinc-900 group-hover:scale-[1.01] transition-transform">
+                        {activeTab === 'login' ? 'Continue with Google' : 'Sign up with Google'}
+                      </span>
+                    </>
                   )}
                 </Button>
 
-                {/* TOGGLE TAB LINK */}
-                <div className="text-center pt-2">
-                  <p className="text-xs text-[#C4B5FD]/70">
-                    {activeTab === 'login' ? (
-                      <>
-                        Don't have an account?{' '}
-                        <button
-                          type="button"
-                          onClick={() => { setActiveTab('register'); setErrorMessage(null); }}
-                          className="text-[#A855F7] hover:text-[#EC4899] font-bold transition-colors cursor-pointer underline ml-1"
-                        >
-                          Register
-                        </button>
-                      </>
-                    ) : (
-                      <>
-                        Already have an account?{' '}
-                        <button
-                          type="button"
-                          onClick={() => { setActiveTab('login'); setErrorMessage(null); }}
-                          className="text-[#A855F7] hover:text-[#EC4899] font-bold transition-colors cursor-pointer underline ml-1"
-                        >
-                          Login
-                        </button>
-                      </>
-                    )}
-                  </p>
-                </div>
+                {/* 2. CONTINUE WITH GITHUB */}
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handleGithubAuth}
+                  disabled={isLoading}
+                  className="w-full h-12 bg-[#1A0830] hover:bg-[#250B42] text-white border-[#A855F7]/40 hover:border-[#A855F7] rounded-2xl text-xs font-bold transition-all shadow-[0_0_20px_rgba(168,85,247,0.2)] hover:shadow-[0_0_25px_rgba(168,85,247,0.4)] flex items-center justify-center gap-3 cursor-pointer group"
+                >
+                  {loadingProvider === 'github' ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin text-white" />
+                      <span>Authenticating with GitHub...</span>
+                    </>
+                  ) : (
+                    <>
+                      <GithubIcon size={20} className="text-white shrink-0 group-hover:scale-110 transition-transform" />
+                      <span className="font-semibold text-white">
+                        {activeTab === 'login' ? 'Continue with GitHub' : 'Sign up with GitHub'}
+                      </span>
+                    </>
+                  )}
+                </Button>
 
-              </form>
+              </div>
+
+              {/* Security & Compliance Assurance */}
+              <div className="pt-6 mt-4 border-t border-[#2A1240]/60 text-center space-y-2">
+                <div className="flex items-center justify-center gap-1.5 text-[11px] text-[#C4B5FD]/70">
+                  <ShieldCheck size={14} className="text-emerald-400" />
+                  <span>Enterprise OAuth 2.0 & Firebase Token Verification</span>
+                </div>
+                <p className="text-[10px] text-zinc-500">
+                  By continuing, you agree to Rakshak's security protocols and workspace terms.
+                </p>
+              </div>
+
+              {/* TOGGLE TAB LINK */}
+              <div className="text-center pt-3">
+                <p className="text-xs text-[#C4B5FD]/70">
+                  {activeTab === 'login' ? (
+                    <>
+                      Don't have an account yet?{' '}
+                      <button
+                        type="button"
+                        onClick={() => { setActiveTab('register'); setErrorMessage(null); }}
+                        className="text-[#A855F7] hover:text-[#EC4899] font-bold transition-colors cursor-pointer underline ml-1"
+                      >
+                        Register with Google or GitHub
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      Already have an account?{' '}
+                      <button
+                        type="button"
+                        onClick={() => { setActiveTab('login'); setErrorMessage(null); }}
+                        className="text-[#A855F7] hover:text-[#EC4899] font-bold transition-colors cursor-pointer underline ml-1"
+                      >
+                        Sign In
+                      </button>
+                    </>
+                  )}
+                </p>
+              </div>
+
             </div>
           </motion.div>
 
@@ -743,7 +586,7 @@ export default function Login({ initialTab = 'login' }: AuthPageProps) {
 
       {/* FOOTER */}
       <footer className="w-full max-w-7xl mx-auto px-6 py-6 text-center z-10 text-xs text-[#C4B5FD]/60 flex flex-col sm:flex-row items-center justify-between gap-2 border-t border-[#2A1240]/40 mt-6">
-        <p>© 2025 Rakshak. All rights reserved.</p>
+        <p>&copy; 2025 Rakshak. All rights reserved.</p>
         <p className="flex items-center gap-1.5">
           <span>Built for a secure tomorrow</span>
           <span className="text-[#EC4899]">💜</span>

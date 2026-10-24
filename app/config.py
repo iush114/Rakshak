@@ -10,7 +10,11 @@ def csv_env(name: str, default: str) -> list[str]:
 
 
 def is_production() -> bool:
-    return os.getenv("RAKSHAK_ENV", "development").lower() == "production"
+    return (
+        os.getenv("RAKSHAK_ENV", "development").lower() in ("production", "prod")
+        or os.getenv("ENVIRONMENT", "").lower() == "production"
+        or os.getenv("RENDER", "").lower() == "true"
+    )
 
 
 def scan_allowed_roots() -> list[Path]:
