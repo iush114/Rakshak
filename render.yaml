@@ -71,7 +71,7 @@ services:
       - key: VITE_FIREBASE_AUTH_DOMAIN
         value: rakshak-auth.firebaseapp.com
       - key: VITE_FIREBASE_API_KEY
-        value: AIzaSyAH61j9q9mNvV59ZE6xWVVupJqRFTcFK4o
+        sync: false
       - key: VITE_FIREBASE_STORAGE_BUCKET
         value: rakshak-auth.firebasestorage.app
       - key: VITE_FIREBASE_MESSAGING_SENDER_ID
